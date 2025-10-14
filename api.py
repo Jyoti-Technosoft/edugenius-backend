@@ -19,7 +19,6 @@ from onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Model import Mode
 
 pytesseract.pytesseract.tesseract_cmd = r"./usr/bin/tesseract"
 
-
 app = Flask(__name__)
 CORS(app)
 from collections import OrderedDict
