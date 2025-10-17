@@ -1,6 +1,7 @@
 import uuid
-
-#from examples.transformation.signature_method import model
+from collections import Counter
+import pickle
+from typing import List, Dict, Any, Tuple
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import fitz  # PyMuPDF
@@ -13,6 +14,22 @@ from datetime import datetime
 import google.generativeai as genai
 import base64
 import random
+from gradio import process_pdf_pipeline
+
+"""
+===========================================================
+
+
+MODEL OPTIONS
+
+
+===========================================================
+"""
+
+
+#from working_prototype_layout_safety import process_pdf_pipeline #[UNCOMMENT THIS FOR USING THE FINETUNED LAYOUTLMv3+CRF MODEL]
+from working_prototype_layout_LSTM import process_pdf_pipeline  # Bi-LSTM_CRF MODEL
+#from BERT_CRF_INFERENCE import process_pdf_pipeline  # BERT_CRF_INFERENCE MODEL
 
 from matplotlib.cbook import CallbackRegistry
 from onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Model import Model
@@ -21,8 +38,18 @@ pytesseract.pytesseract.tesseract_cmd = r"./usr/bin/tesseract"
 
 app = Flask(__name__)
 CORS(app)
+
 from collections import OrderedDict
-from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_session_by_testId,test_sessions_by_userId
+
+"""
+====================================================================
+
+Helper Functions
+
+====================================================================
+"""
+
+from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata
 from werkzeug.utils import secure_filename
 
 #
@@ -34,6 +61,8 @@ from werkzeug.utils import secure_filename
 #this file is using our pre-trained model by default
 #
 # ===================================================
+ #from examples.transformation.signature_method import model
+
 # genai.configure(api_key="test-key")
 # model = genai.GenerativeModel("gemini-2.0-flash")
 #
@@ -219,7 +248,6 @@ from werkzeug.utils import secure_filename
     # print(f"Successfully saved raw text to '{output_path}'.")
 
 
-
 def format_mcq(mcq):
     return {
         "question": mcq.get("question") or mcq.get("ques") or mcq.get("q"),
@@ -233,371 +261,65 @@ def format_mcq(mcq):
 # uncomment the text below to use gemini pipeline instead of the pre-trained model
 # ===================================================
 
-
-
-
-#
-# import json
-#
-# def extract_from_pdf(pdf_path):
-#     # This call now saves the file and does not return a list of chunks
-#     extract_text_chunks(pdf_path, output_path="raw_text.txt")
-#
-#     # Read the content from the newly created file
-#     try:
-#         with open("raw_text.txt", 'r', encoding='utf-8') as f:
-#             raw_text = f.read()
-#     except FileNotFoundError:
-#         print("[ERROR] raw_text.txt not found. Exiting.")
-#         return []
-#
-#     # Process the raw text into chunks
-#     chunks = raw_text.split("\n\n")
-#
-#     all_mcqs = []
-#     seen = set()
-#
-#     for idx, chunk in enumerate(chunks):
-#         if not chunk.strip():
-#             continue
-#
-#         prompt = get_prompt(chunk)
-#         try:
-#             resp = model.generate_content(prompt)
-#             raw = resp.text.strip()
-#             print(f"[Gemini chunk {idx+1}]:", raw)
-#
-#             if raw.startswith("```json"):
-#                 raw = raw.replace("```json", "").replace("```", "").strip()
-#
-#             try:
-#                 data = json.loads(raw)
-#                 mcqs_from_chunk = []
-#
-#                 if isinstance(data, list):
-#                     # Handle the case where the response is a list of questions
-#                     mcqs_from_chunk = data
-#                 elif isinstance(data, dict) and "mcqs" in data:
-#                     # Handle the case where the response is a dictionary with an 'mcqs' key
-#                     mcqs_from_chunk = data["mcqs"]
-#                 else:
-#                     print(f"[Warning] Unexpected JSON format for chunk {idx+1}. Skipping.")
-#                     continue
-#
-#                 for mcq in mcqs_from_chunk:
-#                     question_text = mcq.get('question', '').strip()
-#                     if question_text and question_text not in seen:
-#                         all_mcqs.append(mcq)
-#                         seen.add(question_text)
-#
-#             except json.JSONDecodeError as e:
-#                 print(f"[Warning] Failed to parse JSON for chunk {idx+1}: {e}")
-#                 print("Raw response:", raw)
-#                 continue
-#         except Exception as e:
-#             print(f"[Error] Gemini content generation failed for chunk {idx+1}: {e}")
-#             continue
-#
-#     return all_mcqs
-#
-
-# ===================================================
-#
-# PRE-TRAINED MODEL ( Comment this whole block out if you dont want to use it)
-#
-# ===================================================
-
-
-import torch
-import json
-import re
-import fitz
-import os
-import numpy as np
-from PIL import Image, ImageEnhance
-import pytesseract
-import torch.nn as nn
-from TorchCRF import CRF
-from typing import List, Dict, Any
-from transformers import DistilBertTokenizerFast, DistilBertModel
-
-
-# Set the Tesseract executable path if it's not in your PATH
-# On Windows, it might be something like: r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
 
-# --- Custom Model Class (Must be included to load the saved state) ---
-class DistilBertCrfForTokenClassification(nn.Module):
-    def __init__(self, num_labels, model_name="distilbert-base-uncased"):
-        super(DistilBertCrfForTokenClassification, self).__init__()
-        self.num_labels = num_labels
-        self.distilbert = DistilBertModel.from_pretrained(model_name)
-        self.dropout = nn.Dropout(self.distilbert.config.seq_classif_dropout)
-        self.classifier = nn.Linear(self.distilbert.config.dim, num_labels)
-        self.crf = CRF(num_labels)
+class Vocab:
+    """Vocabulary class for serialization and lookup."""
 
-    def forward(self, input_ids, attention_mask, labels=None):
-        outputs = self.distilbert(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        sequence_output = outputs[0]
-        sequence_output = self.dropout(sequence_output)
-        logits = self.classifier(sequence_output)
+    def __init__(self, min_freq=1, unk_token="<UNK>", pad_token="<PAD>"):
+        self.min_freq = min_freq
+        self.unk_token = unk_token
+        self.pad_token = pad_token
+        self.freq = Counter()
+        self.itos = []
+        self.stoi = {}
 
-        if labels is not None:
-            crf_mask = labels != -100
-            labels[labels == -100] = 0
-            crf_loss = -self.crf(logits, labels, crf_mask).sum()
-            return {"loss": crf_loss, "logits": logits}
+    def __len__(self):
+        return len(self.itos)
 
-        return {"logits": logits}
+    def __getitem__(self, token: str) -> int:
+        """Allows lookup using word_vocab[token]. Returns UNK index if token is not found."""
+        # Returns the index of the token, or the index of <UNK> if not found.
+        return self.stoi.get(token, self.stoi[self.unk_token])
 
-    def predict(self, input_ids, attention_mask):
-        outputs = self.distilbert(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        sequence_output = outputs[0]
-        logits = self.classifier(sequence_output)
-        viterbi_path = self.crf.viterbi_decode(logits, attention_mask.bool())
-        return viterbi_path
+    # Methods for pickle serialization
+    def __getstate__(self):
+        return {
+            'min_freq': self.min_freq,
+            'unk_token': self.unk_token,
+            'pad_token': self.pad_token,
+            'itos': self.itos,
+            'stoi': self.stoi,
+        }
+
+    def __setstate__(self, state):
+        self.min_freq = state['min_freq']
+        self.unk_token = state['unk_token']
+        self.pad_token = state['pad_token']
+        self.itos = state['itos']
+        self.stoi = state['stoi']
+        self.freq = Counter()
 
 
-# --- Main Pipeline Function ---
-def process_pdf_to_json(pdf_path, labels_json_path, model_dir):
-    """
-    Automates the entire workflow:
-    1. Extracts and transforms text from a PDF with header/footer removal and OCR fallback.
-    2. Runs predictions on the transformed text.
-    3. Converts the predictions to structured JSON and returns it.
-    """
+def load_vocabs(path: str) -> Tuple[Vocab, Vocab]:
+    """Loads word and character vocabularies from a pickle file."""
     try:
-        doc = fitz.open(pdf_path)
+        with open(path, "rb") as f:
+            word_vocab, char_vocab = pickle.load(f)
+
+        if len(word_vocab) <= 2 or len(char_vocab) <= 2:
+            raise IndexError("Vocabulary file loaded but sizes are suspiciously small.")
+
+        return word_vocab, char_vocab
     except FileNotFoundError:
-        print(f"Error: The PDF file '{pdf_path}' was not found.")
-        return None
+        raise FileNotFoundError(f"Vocab file not found at {path}. Please check the path.")
+    except Exception as e:
+        raise RuntimeError(f"Error loading vocabs from {path}: {e}")
 
-    full_text_parts = []
-    os.makedirs("static", exist_ok=True)
 
-    for j in range(len(doc)):
-        page = doc[j]
-        blocks = []
-        is_mcq_page = False
 
-        header_height = 50
-        footer_height = 50
-        content_rect = fitz.Rect(0, header_height, page.rect.width, page.rect.height - footer_height)
 
-        try:
-            page_dict = page.get_text("dict", sort=True, clip=content_rect)
-            for block in page_dict.get("blocks", []):
-                bbox = block.get("bbox", [0, 0, 0, 0])
-                sort_key = (bbox[1], bbox[0])
-                if block.get("type") == 0:
-                    text_block = ""
-                    for line in block.get("lines", []):
-                        for span in line.get("spans", []):
-                            text_block += span.get("text", "")
-                        text_block += "\n"
-                    text_block = text_block.strip()
-                    if text_block:
-                        if re.search(r'^[A-D][\.\)]\s', text_block, re.MULTILINE):
-                            is_mcq_page = True
-                        blocks.append((sort_key, text_block, "text"))
-        except Exception as e:
-            print(f"[Warning] Failed to parse layout on page {j + 1}: {e}")
-
-        page_text = ""
-        if len(" ".join(t[1] for t in blocks if t[2] == "text").strip()) < 20 or is_mcq_page:
-            try:
-                print(f"Running OCR on page {j + 1}...")
-                pix = page.get_pixmap(dpi=300)
-                img_path = f"static/temp_page_{j + 1}.png"
-                pix.save(img_path)
-                image = Image.open(img_path)
-
-                enhancer = ImageEnhance.Contrast(image)
-                image = enhancer.enhance(2)
-
-                cropped_image = image.crop((content_rect.x0, content_rect.y0, content_rect.x1, content_rect.y1))
-
-                page_text = pytesseract.image_to_string(cropped_image)
-                os.remove(img_path)
-            except Exception as e:
-                print(f"[Error] OCR failed on page {j + 1}: {e}")
-                page_text = ""
-        else:
-            vertical_gaps = []
-            if len(blocks) > 1:
-                sorted_blocks = sorted([b for b in blocks if b[2] == "text"], key=lambda x: (x[0][0], x[0][1]))
-                if len(sorted_blocks) > 1:
-                    for i in range(1, len(sorted_blocks)):
-                        gap = sorted_blocks[i][0][0] - sorted_blocks[i - 1][0][0]
-                        if gap > 0: vertical_gaps.append(gap)
-
-            if vertical_gaps:
-                average_gap = np.mean(vertical_gaps)
-                LINE_BREAK_THRESHOLD = average_gap * 1.5
-                PARAGRAPH_BREAK_THRESHOLD = average_gap * 2.5
-            else:
-                LINE_BREAK_THRESHOLD = 15
-                PARAGRAPH_BREAK_THRESHOLD = 30
-
-            try:
-                blocks.sort(key=lambda x: (x[0][0], x[0][1]))
-                page_text_parts = []
-                current_line_y = -1
-                for pos, text, block_type in blocks:
-                    y = pos[0]
-                    if current_line_y > 0:
-                        vertical_gap = abs(y - current_line_y)
-                        if vertical_gap > PARAGRAPH_BREAK_THRESHOLD:
-                            page_text_parts.append("[PARAGRAPH_BREAK]")
-                        elif vertical_gap > LINE_BREAK_THRESHOLD:
-                            page_text_parts.append("[BR]")
-                    page_text_parts.append(text)
-                    current_line_y = y
-                page_text = " ".join(page_text_parts)
-                if is_mcq_page:
-                    page_text = re.sub(r'(\b[A-D]) (?=\w)', r'\1', page_text)
-                    page_text = re.sub(r'([A-D])\.\s*\n\s*', r'\1. ', page_text)
-            except Exception as e:
-                print(f"Sorting failed: {e}")
-                page_text = " ".join(t[1] for t in blocks)
-
-        if page_text.strip():
-            full_text_parts.append(f"=== PAGE {j + 1} ===\n{page_text}")
-
-    doc.close()
-
-    raw_text = "\n\n".join(full_text_parts)
-
-    # --- MODIFIED: More flexible regex to match various question formats ---
-    question_blocks = re.split(r'((?:Q\.\d+|Question\s+\d+|\d+\.)(?:\s|$))', raw_text, flags=re.IGNORECASE)
-    # --- END MODIFIED SECTION ---
-
-    transformed_blocks = []
-    if len(question_blocks) > 1:
-        # The first element is always the text before the first match, so we start from index 1.
-        # This modification handles cases where the first question isn't perfectly at the start of the text.
-        for i in range(1, len(question_blocks), 2):
-            question_num = question_blocks[i].strip()
-            rest_of_block = question_blocks[i + 1].strip()
-
-            clean_block = re.sub(r'\[BR\]|\[PARAGRAPH_BREAK\]|=== PAGE \d+ ===', '', rest_of_block)
-            clean_block = re.sub(r'\s+', ' ', clean_block).strip()
-            clean_block = clean_block.replace('(A)', 'a.').replace('(B)', 'b.').replace('(C)', 'c.').replace('(D)',
-                                                                                                             'd.')
-            clean_block = clean_block.replace('(a)', 'a.').replace('(b)', 'b.').replace('(c)', 'c.').replace('(d)',
-                                                                                                             'd.')
-            clean_block = clean_block.replace(' a)', ' a.').replace(' b)', ' b.').replace(' c)', ' c.').replace(' d)',
-                                                                                                             ' d.')
-            clean_block = clean_block.replace('(i)', 'a.').replace('(ii)', 'b.').replace('(iii)', 'c.').replace('(iv)',
-                                                                                                                'd.')
-            clean_block = clean_block.replace(' i ', 'a.').replace(' ii ', 'b.').replace(' iii ', 'c.').replace(' iv ',
-                                                                                                                'd.')
-            clean_block = clean_block.replace('Ans:', '')
-            clean_block = clean_block.replace('ANSWER:','')
-            clean_block = clean_block.replace('Answer:', '')
-
-            transformed_blocks.append(f"{question_num} {clean_block}")
-
-    final_mcqs_text = "\n".join(transformed_blocks)
-
-    try:
-        with open(labels_json_path, 'r', encoding='utf-8') as f:
-            uploaded_data = json.load(f)
-    except FileNotFoundError:
-        print(f"Error: Labels file '{labels_json_path}' not found.")
-        return None
-
-    unique_labels = sorted(list(set(item['label'] for item in uploaded_data)))
-    id_to_label = {i: label for i, label in enumerate(unique_labels)}
-
-    tokenizer = DistilBertTokenizerFast.from_pretrained(model_dir)
-    model = DistilBertCrfForTokenClassification(num_labels=len(unique_labels))
-    model.load_state_dict(torch.load(f"{model_dir}/model.pt"))
-    model.eval()
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    model.to(device)
-
-    lines = final_mcqs_text.strip().split('\n')
-    predictions_output = []
-
-    for line_number, line in enumerate(lines, 1):
-        line = line.strip()
-        if not line: continue
-        tokens = re.findall(r"[\w']+|[.,?!:;()]", line)
-        tokenized_input = tokenizer(tokens, return_tensors="pt", truncation=True, is_split_into_words=True)
-        input_ids = tokenized_input["input_ids"].to(device)
-        attention_mask = tokenized_input["attention_mask"].to(device)
-
-        with torch.no_grad():
-            predictions = model.predict(input_ids=input_ids, attention_mask=attention_mask)
-
-        word_ids = tokenized_input.word_ids(batch_index=0)
-        predicted_list = []
-        previous_word_idx = None
-        for idx, word_idx in enumerate(word_ids):
-            if word_idx is not None and word_idx != previous_word_idx:
-                predicted_list.append({"token": tokens[word_idx], "label": id_to_label[predictions[0][idx]]})
-            previous_word_idx = word_idx
-
-        predictions_output.append({"line_number": line_number, "text": line, "predictions": predicted_list})
-
-    structured_data = []
-    for item in predictions_output:
-        predictions = item.get("predictions", [])
-        state = "question"
-        current_question, current_options, current_option_text, current_option_key, current_answer = [], {}, [], None, []
-
-        for pred in predictions:
-            token, label = pred["token"], pred["label"]
-            if "QUESTION" in label:
-                state = "question"
-                current_question.append(token)
-            elif "OPTION" in label:
-                if label.startswith("B-"):
-                    if current_option_key is not None: current_options[current_option_key] = " ".join(
-                        current_option_text).strip()
-                    state = "option"
-                    current_option_key = token.upper()
-                    current_option_text = []
-                elif label.startswith("I-") and state == "question":
-                    state = "option"
-                    current_option_key = "A"
-                    current_option_text.append(token)
-                else:
-                    current_option_text.append(token)
-            elif "ANSWER" in label:
-                if current_option_key is not None:
-                    current_options[current_option_key] = " ".join(current_option_text).strip()
-                    current_option_text = []
-                    current_option_key = None
-                state = "answer"
-                current_answer.append(token)
-
-        if current_option_key is not None: current_options[current_option_key] = " ".join(current_option_text).strip()
-        for key, value in current_options.items():
-            if value.startswith(f"{key.lower()}."): current_options[key] = value[2:].strip()
-
-        if current_question:
-            structured_data.append({
-                "question": " ".join(current_question).strip(),
-                "options": current_options,
-                "answer": " ".join(current_answer).strip()
-            })
-
-    return structured_data
-
-# ===========================================================
-#
-# PRE_TRAINED MODEL PIPELINE END
-#
-# ===========================================================
 
 
 UPLOAD_FOLDER = "uploaded_pdfs"
@@ -631,12 +353,22 @@ def upload_pdf():
     createdAtTimestamp = datetime.now().isoformat()
 
     # Extract and format MCQs
-#    mcqs = extract_from_pdf(file_path) #activate this line and the rest of the code block when you want to use the gemini
-    mcqs = process_pdf_to_json(file_path, labels_json_path="reference.json", model_dir="./CRF_BERT_MODEL")
-    #stored_count = store_mcqs(user_id, title, description, mcqs, file_name)
-    stored_id = store_mcqs(user_id, title, description, mcqs, file_name, createdAtTimestamp)
 
+#    final-data = extract_from_pdf(file_path) #uncomment this line and the rest of the code block when you want to use the gemini
 
+#    final_data = process_pdf_to_json(file_path, labels_json_path="reference.json", model_dir="./CRF_BERT_MODEL")  ### UNCOMMENT THIS IF YOU WANT TO USE THE BERT_CRF MODEL
+
+#    final_data = process_pdf_pipeline(file_path, model_path="./output_data/model.pt", vocab_path= "./output_data/vocabs.pkl") #UNCOMMENT THIS IF YOU WANT TO HAVE THE 'model.pt' and 'vocab.pkl' file with you and want to run the inference locally
+
+    #raw_json_data, final_data, annotated_path = process_pdf_pipeline(input_pdf_path=file_path, model_path="./checkpoints/layoutlmv3_crf_new.pth") #UNCOMMENT THIS IF YOU WANT TO USE THE LAYOUTLMV3 script for inference
+
+    final_data =  process_pdf_pipeline(file_path) #huggingface API
+
+    indexed_mcqs = []
+    for i, mcq in enumerate(final_data):
+        mcq['documentIndex'] = i  # Add the index here
+        indexed_mcqs.append(mcq)
+    stored_id = store_mcqs(user_id, title, description, indexed_mcqs, file_name, createdAtTimestamp)
 
 
     return Response(
@@ -653,9 +385,7 @@ def upload_pdf():
 
 
 
-
-
-@app.route("/paper_sets_by_user", methods=["POST"])
+@app.route("/question_bank_by_user", methods=["POST"])
 def paper_sets_by_userID():
     data = request.get_json(silent=True) or request.form.to_dict()
     userId = data.get("userId")
@@ -664,14 +394,28 @@ def paper_sets_by_userID():
     if not mcqs_data:
         return jsonify({"message": "No Paper Sets found"})
 
+    # FIX: Iterate through each paper set and sort its MCQs list
+    for paper_set in mcqs_data:
+        # Check if the 'mcqs' list exists and is iterable
+        if paper_set.get('metadata', {}).get('mcqs'):
+            mcqs_list = paper_set['metadata']['mcqs']
+
+
+            # This handles older data that might have missing or None 'documentIndex' values.
+            paper_set['metadata']['mcqs'] = sorted(
+                mcqs_list,
+                key=lambda x: int(x['documentIndex'])
+                if x.get('documentIndex') is not None else float('inf')
+            )
+            # ===============================================
+
     return Response(
         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
         mimetype="application/json"
-     )
+    )
 
 
-
-@app.route("/paper_sets_by_id", methods=["POST"])
+@app.route("/question_bank_by_id", methods=["POST"])
 def paper_sets_by_generatedQAId():
    data = request.get_json(silent=True) or request.form.to_dict()
    generatedQAId = data.get("generatedQAId")
@@ -682,10 +426,20 @@ def paper_sets_by_generatedQAId():
    results = fetch_mcqs(generatedQAId=generatedQAId)
 
    if not results:
-       return jsonify({"error": "No MCQs found for the provided ID"}), 404
+       return jsonify({"error": "No MCQs found for the provided ID"}), 200
 
+   if results and results[0].get('metadata', {}).get('mcqs'):
+       mcqs_list = results[0]['metadata']['mcqs']
+       # Sort by the 'documentIndex' field.
+       # Fall back to 0 if the index is missing, though it shouldn't be.
+       results[0]['metadata']['mcqs'] = sorted(
+           mcqs_list,
+           key=lambda x: x.get('documentIndex', 0)
+       )
+   # ===============================================
    # Return the full list of results, as generated by fetch_mcqs
    return jsonify(results)
+
 
 
 @app.route("/generate_test", methods=["POST"])
@@ -693,16 +447,6 @@ def generate_test():
     """
     API to fetch MCQs by generated-qa-Id and marks (limit),
     and also to create a new test entry.
-
-    {
-  "generatedQAId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f6a1b2",
-  "marks": 10,
-  "userId": "user12345",
-  "testTitle": "My First Test"
-}
-
-It will create a test for the specified number of marks and create a corresponding testId
-
     """
     data = request.get_json(silent=True) or request.form
 
@@ -710,72 +454,70 @@ It will create a test for the specified number of marks and create a correspondi
     marks = data.get("marks")
     userId = data.get("userId")
     testTitle = data.get("testTitle")
-    testTimeLimit = data.get("testTimeLimit")
+    totalTime = data.get("totalTime")
 
     if not generatedQAId:
         return jsonify({"error": "generatedQAId is required"}), 400
-
-    if not marks:
-        return jsonify({"error": "marks is required"}), 400
-
-    # testTitle is required to store the test
-    if not testTitle:
-        return jsonify({"error": "testTitle is required"}), 400
+    # ... (other validation checks)
 
     try:
         marks = int(marks)
     except ValueError:
         return jsonify({"error": "marks must be an integer"}), 400
 
-    # Generate a unique test ID and a timestamp
     testId = str(uuid.uuid4())
     createdAt = datetime.now().isoformat()
 
-    # Use the fetch_random_mcqs function from the provided vector_db module.
-    # It returns a list containing a single dictionary with 'metadata' and 'mcqs'
+    # 1. Fetch random sample
     test_data_results = fetch_random_mcqs(generatedQAId, num_questions=marks)
 
     if not test_data_results:
-        return jsonify({"message": "No MCQs found"}), 404
+        return jsonify({"message": "No MCQs found"}), 200
 
-    # Extract the MCQs list from the results
     mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
 
-    # The functionality to store the test with testId and createdAt
-    # is not available in the provided vector_db.py file.
-    # A new function, for example, `vector_db.store_test_session(...)`,
-    # would be needed to save this information.
+  
+    # The list mcqs_data is now in the final, random order for the test.
 
-    # Fix: Pass the correct arguments in the correct order
+    # 2. ASSIGN NEW SEQUENTIAL INDEX (testIndex)
+    final_mcqs_for_storage = []
+    for i, mcq in enumerate(mcqs_data):
+        # Assign a sequential index starting from 1 for the client/storage
+        mcq['testIndex'] = i + 1
+        final_mcqs_for_storage.append(mcq)
+
+    # 3. Store the session using the indexed list
     if userId:
-        is_stored = store_test_session(userId, testId, testTitle,testTimeLimit, createdAt, mcqs_data)
+        is_stored = store_test_session(userId, testId, testTitle, totalTime, createdAt, final_mcqs_for_storage)
         if not is_stored:
             return jsonify({"error": "Failed to store test session"}), 500
 
-    # Return the test ID along with the MCQs
+    # 4. Return the result
     return jsonify({
         "message": "Test created and stored successfully",
         "userId": userId,
         "testId": testId,
-        "testTimeLimit": testTimeLimit,
+        "totalTime": totalTime,
         "createdAt": createdAt,
-        "questions": mcqs_data
+        "questions": final_mcqs_for_storage  # Return the indexed list
     }), 200
 
-@app.route("/combined_test", methods=["POST"])
-def combined_test():
 
+
+@app.route("/combined_paperset", methods=["POST"])
+def combined_test():
     data = request.get_json(silent=True) or request.form
 
     userId = data.get("userId")
     testTitle = data.get("testTitle")
-    testTimeLimit = data.get("testTimeLimit")
+    totalTime = data.get("totalTime")
     total_questions = data.get("total_questions")
     sources = data.get("sources")
 
     # Validate required inputs
-    if not all([userId, testTitle, testTimeLimit, total_questions, sources]) or not isinstance(sources, list):
-        return jsonify({"error": "userId, testTitle, total_questions, and a list of sources are required"}), 400
+    if not all([userId, testTitle, totalTime, total_questions, sources]) or not isinstance(sources, list):
+        return jsonify(
+            {"error": "userId, testTitle, total_questions, totalTime, and a list of sources are required"}), 400
 
     try:
         total_questions = int(total_questions)
@@ -796,49 +538,60 @@ def combined_test():
         # Calculate the number of questions for this source
         num_questions = round(total_questions * (percentage / 100))
 
-        # Fetch a random sample from this source, filtered by userId
+        # Fetch a random sample from this source
+        # Note: fetch_random_mcqs returns a list containing a dict with metadata/mcqs
         mcqs_record = fetch_random_mcqs(generatedQAId=qa_id, num_questions=num_questions)
+
         if mcqs_record:
+            # Extract the list of questions and combine them
             all_mcqs.extend(mcqs_record[0].get("metadata", {}).get("mcqs", []))
 
-    # Shuffle the combined list of all MCQs
+    # Shuffle the combined list of all MCQs to finalize the test order
     random.shuffle(all_mcqs)
 
     if not all_mcqs:
-        return jsonify({"message": "No MCQs found for the provided IDs"}), 404
+        return jsonify({"message": "No MCQs found for the provided IDs"}), 200
+
+
+    # Assign a new, sequential index (testIndex) to each question
+    final_mcqs_for_storage = []
+    for i, mcq in enumerate(all_mcqs):
+        # Assign a sequential index starting from 1
+        mcq['testIndex'] = i + 1
+        final_mcqs_for_storage.append(mcq)
+
+
 
     # Generate test metadata
     testId = str(uuid.uuid4())
     createdAt = datetime.now().isoformat()
 
-    # Store the test session with the new title
-    store_test_session(userId, testId, testTitle, testTimeLimit, createdAt, all_mcqs)
+    # Store the test session with the indexed list
+    store_test_session(userId, testId, testTitle, totalTime, createdAt, final_mcqs_for_storage)
 
     return jsonify({
-
         "userId": userId,
         "testId": testId,
         "testTitle": testTitle,
-        "testTimeLimit": testTimeLimit,
+        "totalTime": totalTime,
         "createdAt": createdAt,
-        "questions": all_mcqs
+        "questions": final_mcqs_for_storage  # Return the correctly indexed list
     }), 200
 
 
-@app.route("/test/<testId>", methods=["GET"])
+@app.route("/paper_set/<testId>", methods=["GET"])
 def testId(testId):
     """
 
-
     API to fetch a specific test session by its ID.
     """
-    test_data = fetch_test_session_by_testId(testId)
+    test_data = fetch_test_by_testId(testId)
     if not test_data:
-        return jsonify({"error": "Test session not found"}), 404
+        return jsonify({"error": "Test  not found"}), 200
     return jsonify(test_data), 200
 
 
-@app.route("/test_history/<userId>", methods=["GET"])
+@app.route("/paper_sets_by_user/<userId>", methods=["GET"])
 def test_history_by_userId(userId):
     """
     API to fetch a list of test sessions for a given user, including all details.
@@ -848,65 +601,35 @@ def test_history_by_userId(userId):
         return jsonify({"error": "An error occurred while fetching test history"}), 500
 
     if not test_history:
-        return jsonify({"message": "No test sessions found for this user"}), 404
+        return jsonify({"message": "No test sessions found for this user"}), 200
 
     return jsonify(test_history), 200
-
-
-
-
 
 
 @app.route("/submit_test", methods=["POST"])
 def submit_test():
     """
-    API to submit student answers and get results.
-
-    The request body is a list of objects, each containing a question,
-    the submitted answer, and the correct answer for verification.
-
-    {
-  "userId": "user12345",
-  "testId": "a1b2c3d4-e5f6-7890-a1b2-c3d4e5f6a1b2",
-  "testTitle": "History Quiz 1",
-  "answers": [
-    {
-      "question": "What is the capital of France?",
-      "your_answer": "Paris",
-      "correct_answer": "Paris"
-    },
-    {
-      "question": "What is 2 + 2?",
-      "your_answer": "5",
-      "correct_answer": "4"
-    },
-    {
-      "question": "Which planet is known as the Red Planet?",
-      "your_answer": "Mars",
-      "correct_answer": "Mars"
-    }
-  ]
-}
+    API to submit student answers and get results,
+    and also to store the submission for future analysis.
     """
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict) or "answers" not in payload:
-        return jsonify({"error": "Request body must be a dictionary with an 'answers' key"}), 400
-
+    payload = request.get_json(silent=True) or {}
     answers = payload.get("answers")
     userId = payload.get("userId")
-    testTitle = payload.get("testTitle")
     testId = payload.get("testId")
+    testTitle = payload.get("testTitle")
+    timeSpent = payload.get("timeSpent")
+    totalTime = payload.get("totalTime")
     submittedAt = datetime.now().isoformat()
-    testTime = payload.get("testTime")
+    totalQuestions = payload.get("totalQuestions")
 
-
-
+    if not all([userId, testId, answers, submittedAt]):
+        return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
 
     if not isinstance(answers, list):
-        return jsonify({"error": "Request body must be a list of answers"}), 400
+        return jsonify({"error": "Answers must be a list"}), 400
 
     score = 0
-    total_questions = len(answers)
+
     detailed_results = []
 
     for item in answers:
@@ -926,31 +649,302 @@ def submit_test():
                 ("is_correct", is_correct)
             ]))
         else:
-            # Handle malformed or missing data in an entry
             detailed_results.append(OrderedDict([
                 ("question", question or "N/A"),
                 ("error", "Missing required fields")
             ]))
 
+    # Now, we store the results in the database
+    is_stored = store_submitted_test(
+        userId=userId,
+        testId=testId,
+        testTitle=testTitle,
+        timeSpent=timeSpent,
+        totalTime=totalTime,
+        submittedAt=submittedAt,
+        detailed_results=detailed_results,
+        score=score,
+        total_questions=totalQuestions
+    )
+
+    if not is_stored:
+        return jsonify({"error": "Failed to store submission"}), 500
+
     response = OrderedDict([
-        ("total_questions", total_questions),
+        ("total_questions", totalQuestions),
         ("score", score),
         ("testTitle", testTitle),
         ("submittedAt", submittedAt),
         ("userId", userId),
         ("testId", testId),
-        ("testTime", testTime),
+        ("timeSpent", timeSpent),
         ("detailed_results", detailed_results)
     ])
 
     return jsonify(response)
+
+@app.route("/submitted_tests/<userId>", methods=["GET"])
+def submitted_tests_history(userId):
+    """
+    API to fetch a list of all submitted test sessions for a given user.
+    """
+    if not userId:
+        return jsonify({"error": "userId is required"}), 400
+
+    submitted_tests = submitted_tests_by_userId(userId)
+
+    if submitted_tests is None:
+        return jsonify({"error": "An error occurred while fetching submitted tests"}), 500
+
+    if not submitted_tests:
+        return jsonify({"message": "No submitted tests found for this user"}), 200
+
+    return jsonify(submitted_tests), 200
+
+
+
+@app.route("/question_bank/<generatedQAId>/edit", methods=["PUT"])
+def edit_question_bank(generatedQAId):
+    """
+    Unified API to perform add, edit, or delete operations on questions,
+    and update the question bank's Title and Description.
+    """
+    payload = request.get_json(silent=True) or {}
+    edits = payload.get("edits")
+
+    # Extract metadata fields directly from the payload
+    new_title = payload.get("title")
+    new_description = payload.get("description")
+
+    metadata_update_status = {"title_updated": False, "description_updated": False}
+
+    # --- Step 1: Update Question Bank Metadata (Title/Description) ---
+    if new_title is not None or new_description is not None:
+        # Call the helper function to update only the metadata fields in the main collection
+        metadata_update_status = update_question_bank_metadata(
+            generatedQAId=generatedQAId,
+            title=new_title,
+            description=new_description
+        )
+        if not metadata_update_status.get("success", True):
+            # If the update failed, return an error immediately
+            return jsonify({"error": f"Failed to update metadata for Question Bank ID: {generatedQAId}"}), 500
+
+    # --- Step 2: Process Question-level Edits ---
+    if edits and isinstance(edits, list):
+        for edit in edits:
+            operation = edit.get("operation")
+            data = edit.get("data")
+
+            if not operation or not data:
+                continue
+
+            if operation == "add":
+                add_single_question(generatedQAId, data)
+            elif operation == "edit":
+                questionId = data.get("questionId")
+                if questionId:
+                    update_single_question(questionId, data)
+            elif operation == "delete":
+                questionId = data.get("questionId")
+                if questionId:
+                    delete_single_question(questionId)
+            else:
+                print(f"[WARN] Unknown operation '{operation}' ignored.")
+
+    # --- Step 3: Fetch Updated Data and Respond ---
+    updated_data = fetch_mcqs(generatedQAId=generatedQAId)
+
+    if not updated_data:
+        return jsonify({
+            "error": "Update operations processed, but the question bank was not found.",
+            "generatedQAId_used": generatedQAId
+        }), 404
+
+    updated_questions_count = len(updated_data[0].get("metadata", {}).get("mcqs", []))
+
+    return jsonify({
+        "message": "Question bank updated successfully",
+        "title_updated": metadata_update_status["title_updated"],
+        "description_updated": metadata_update_status["description_updated"],
+        "updated_questions_count": updated_questions_count
+    }), 200
+
+
+
+
+@app.route("/create_manual_question_bank", methods=["POST"])
+def create_manual_question_bank():
+    """
+    API to create a new question bank and populate it with a list of questions
+    in a single request for a smoother user experience.
+    """
+    data = request.get_json(silent=True) or request.form.to_dict()
+    user_id = data.get("userId")
+    title = data.get("title")
+    description = data.get("description")
+    raw_mcqs = data.get("questions", [])  # Expects a list of question objects
+
+    if not all([user_id, title, description]) or not isinstance(raw_mcqs, list):
+        return jsonify({"error": "userId, title, description, and a list of 'questions' are required"}), 400
+
+    if not raw_mcqs:
+        return jsonify({"error": "Question bank must contain at least one question."}), 400
+
+    indexed_mcqs = []
+
+    # 1. Format and Index MCQs (similar to your upload_pdf route logic)
+    for i, mcq in enumerate(raw_mcqs):
+        # Ensure options are properly formatted (if they come as a dict from the client)
+        if 'options' in mcq and isinstance(mcq['options'], dict):
+            # We need to ensure the options are stored as a JSON string
+            # as required by the ChromaDB metadata constraint (as discovered earlier).
+            mcq['options'] = json.dumps(mcq['options'])
+
+        # NOTE: If your database requires questionId/documentIndex, they must be set here.
+        # However, we will assume 'store_mcqs_for_manual_creation' handles questionId and documentIndex assignment.
+        mcq['documentIndex'] = i  # Assign sequential index
+        indexed_mcqs.append(mcq)
+
+    # 2. Store Metadata and Questions (using a modified store function)
+    try:
+        # Create a function similar to store_mcqs but for manual data
+        generated_qa_id = store_mcqs_for_manual_creation(
+            user_id,
+            title,
+            description,
+            indexed_mcqs
+        )
+    except Exception as e:
+        print(f"Error storing manual question bank: {e}")
+        return jsonify({"error": "Failed to create and store question bank"}), 500
+
+    return jsonify({
+        "message": "Question bank created and populated successfully",
+        "generatedQAId": generated_qa_id,
+        "userId": user_id,
+        "title": title,
+        "questions_count": len(indexed_mcqs)
+    }), 201
+
+
+
+@app.route("/question_bank/<generatedQAId>", methods=["DELETE"])
+def delete_question_bank(generatedQAId):
+    """
+    API to delete an entire question bank (metadata and all associated questions).
+    """
+    if not generatedQAId:
+        return jsonify({"error": "generatedQAId is required"}), 400
+
+    # Assume this function handles the deletion from both the main
+    # and the questions collection using the generatedQAId.
+    success = delete_mcq_bank(generatedQAId)
+
+    if success:
+        return jsonify({
+            "message": f"Question bank '{generatedQAId}' and all associated questions deleted successfully."
+        }), 200
+    else:
+        # Return 404 if the bank wasn't found to delete, or 500 on database error
+        return jsonify({
+            "error": f"Failed to delete question bank '{generatedQAId}'. It may not exist."
+        }), 404
+
+
+
+
+
+
+@app.route("/submitted_test/<testId>", methods=["DELETE"])
+def delete_submitted_test(testId):
+    """
+    API to delete a specific submitted test session result by its ID.
+    """
+    if not testId:
+        return jsonify({"error": "testId is required"}), 400
+
+    success = delete_submitted_test_by_id(testId)
+
+    if success:
+        return jsonify({
+            "message": f"Submitted test result '{testId}' deleted successfully."
+        }), 200
+    else:
+        return jsonify({
+            "error": f"Failed to delete submitted test result '{testId}'. It may not exist."
+        }), 404
+
+
+
+
+@app.route("/paper_sets/<testId>", methods=["DELETE"])
+def delete_test_session(testId):
+    """
+    API to delete a specific test session by its ID.
+    """
+    if not testId:
+        return jsonify({"error": "testId is required"}), 400
+
+    # Assume this function handles the deletion from test_sessions_collection
+    success = delete_test_session_by_id(testId)
+
+    if success:
+        return jsonify({
+            "message": f"Test session '{testId}' deleted successfully."
+        }), 200
+
+
+@app.route("/paper_sets/<testId>/edit", methods=["PUT"])
+def edit_paperset(testId):
+    """
+    Unified API to edit an existing test session's metadata (e.g., totalTime, title)
+    or its list of questions.
+
+    Payload should contain the specific fields to update (e.g., {"testTitle": "New Title"}).
+    If updating questions, the payload must contain the full, new 'questions' list.
+    """
+    payload = request.get_json(silent=True) or {}
+
+    if not testId:
+        return jsonify({"error": "testId is required"}), 400
+
+    # 1. Fetch the existing test session record
+    existing_record = fetch_test_by_testId(testId)
+    if not existing_record:
+        return jsonify({"error": f"Test session with ID '{testId}' not found."}), 404
+
+    # 2. Merge existing data with new payload
+    # Note: We must update the 'questions' list if provided in the payload
+    updated_data = existing_record.copy()
+
+    # Remove the existing 'testId' from metadata to avoid redundancy if it was there
+    if 'testId' in updated_data:
+        del updated_data['testId']
+
+        # Merge the payload into the existing record
+    for key, value in payload.items():
+        if key in ['testTitle', 'totalTime', 'questions']:  # Keys we allow to be updated
+            updated_data[key] = value
+
+    # 3. Call the helper function to perform the ChromaDB update
+    # The helper function must handle re-stringifying the 'questions' list if needed.
+    success = update_test_session(testId, updated_data)
+
+    if success:
+        return jsonify({
+            "message": "Test session updated successfully",
+            "testId": testId,
+            "updated_data_keys": list(payload.keys())
+        }), 200
+    else:
+        return jsonify({"error": "Failed to update test session in database."}), 500
 
 
 
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=True)
-
 
 
 
