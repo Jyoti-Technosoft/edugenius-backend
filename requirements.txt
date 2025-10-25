@@ -7,6 +7,6 @@ google-generativeai
 gradio
 gunicorn
 torch
-torch-crf
+torchcrf
 tqdm
 fpdf
