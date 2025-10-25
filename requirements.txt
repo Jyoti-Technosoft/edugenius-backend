@@ -1,12 +1,7 @@
-Flask
+chromadb
+flask
 flask-cors
-PyMuPDF
-pytesseract
-Pillow
-google-generativeai
-gradio
 gunicorn
-torch
-torchcrf
-tqdm
-fpdf
+gradio_client
+numpy
+werkzeug
