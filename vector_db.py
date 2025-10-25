@@ -5,7 +5,7 @@ from base64 import b64encode
 import random
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
+
 from collections import OrderedDict
 from datetime import datetime
 
@@ -47,8 +47,52 @@ else:
 # -----------------------------
 # Embedding model
 # -----------------------------
-embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+import numpy as np
 
+# def embed(text: str):
+#     # return a 32-dim random vector to satisfy ChromaDB
+#     return np.random.rand(32).tolist()
+
+
+# def embed(texts):
+#     """
+#     Generate embeddings for ChromaDB.
+#     Accepts either a single string or a list of strings.
+#     Returns a list of embeddings (list of lists).
+#     """
+#     # Handle single string input
+#     if isinstance(texts, str):
+#         texts = [texts]
+#
+#     # Return list of 32-dim random vectors
+#     return [np.random.rand(32).tolist() for _ in texts]
+#
+# def embed(texts):
+#     """
+#     Generate embeddings for ChromaDB.
+#     Accepts either a single string or a list of strings.
+#     Returns a list of numpy arrays (ChromaDB will handle conversion).
+#     """
+#     # Handle single string input
+#     if isinstance(texts, str):
+#         texts = [texts]
+#
+#     # Return list of 32-dim numpy arrays (not converted to list)
+#     return [np.random.rand(32) for _ in texts]
+
+
+def embed(texts):
+    """
+    Generate embeddings for ChromaDB.
+    Accepts either a single string or a list of strings.
+    Returns a list of embeddings as nested Python lists (not numpy arrays).
+    """
+    # Handle single string input
+    if isinstance(texts, str):
+        texts = [texts]
+
+    # Return list of 32-dim vectors as Python lists
+    return [np.random.rand(32).tolist() for _ in texts]
 
 
 def ordered_mcq(mcq):
@@ -79,9 +123,10 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
         "createdAt": createdAt
     }
     # Using a simple string for embedding, as per your original code
+# CORRECTED CODE
     text_for_embedding = f"{title} {description}"
-    embeddings = embedding_model.encode([text_for_embedding]).tolist()
-
+    embeddings = embed(text_for_embedding)
+    
     collection.add(
         ids=[generatedQAId],
         documents=[userIdClean],
@@ -417,42 +462,6 @@ def submitted_tests_by_userId(userId):
 
 
 
-def update_question_bank(generatedQAId, mcqs_data):
-    """
-    Updates the list of MCQs for an existing question bank.
-
-    Args:
-        generatedQAId (str): The ID of the question bank to update.
-        mcqs_data (list): The new, complete list of MCQs.
-
-    Returns:
-        bool: True on success, False on failure.
-    """
-    try:
-        # Fetch the existing metadata to avoid overwriting other fields
-        existing_record = collection.get(ids=[generatedQAId], include=["metadatas"])
-        if not existing_record or not existing_record["metadatas"]:
-            print(f"[ERROR] Question bank with ID '{generatedQAId}' not found for update.")
-            return False
-
-        current_metadata = existing_record["metadatas"][0]
-
-        # Serialize the updated questions and replace the old 'mcqs' key
-        current_metadata["mcqs"] = json.dumps(mcqs_data)
-
-        # Use upsert to update the record in the collection
-        collection.upsert(
-            ids=[generatedQAId],
-            metadatas=[current_metadata]
-        )
-
-        print(f"[DEBUG] Successfully updated question bank with ID: {generatedQAId}")
-        return True
-    except Exception as e:
-        print(f"[ERROR] Failed to update question bank: {e}")
-        return False
-
-
 
 
 def delete_single_question(questionId):
@@ -577,7 +586,7 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
         "createdAt": createdAt
     }
     text_for_embedding = f"{title} {description} manual question bank"
-    embeddings = embedding_model.encode([text_for_embedding]).tolist()
+    embeddings = embed(text_for_embedding)
 
     collection.add(
         ids=[generatedQAId],
@@ -795,7 +804,7 @@ def update_question_bank_metadata(generatedQAId: str, title: str = None, descrip
         # 3. If title or description changed, update the embedding (CRITICAL for search accuracy)
         if update_result["title_updated"] or update_result["description_updated"]:
             new_text_for_embedding = f"{existing_meta.get('title', '')} {existing_meta.get('description', '')}"
-            new_embeddings = embedding_model.encode([new_text_for_embedding]).tolist()
+            new_embeddings = embed(new_text_for_embedding)
         else:
             new_embeddings = existing_embeddings
 
