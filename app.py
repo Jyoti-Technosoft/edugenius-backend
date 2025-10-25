@@ -4,17 +4,14 @@ import pickle
 from typing import List, Dict, Any, Tuple
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-import fitz  # PyMuPDF
-import pytesseract
 import os
 import re
 import json
-from PIL import Image, ImageEnhance
 from datetime import datetime
-import google.generativeai as genai
 import base64
 import random
-from gradio import process_pdf_pipeline
+from gradio_api import call_edugenius_api, call_layoutlm_api
+
 
 """
 ===========================================================
@@ -28,13 +25,11 @@ MODEL OPTIONS
 
 
 #from working_prototype_layout_safety import process_pdf_pipeline #[UNCOMMENT THIS FOR USING THE FINETUNED LAYOUTLMv3+CRF MODEL]
-from working_prototype_layout_LSTM import process_pdf_pipeline  # Bi-LSTM_CRF MODEL
+#from working_prototype_layout_LSTM import process_pdf_pipeline  # Bi-LSTM_CRF MODEL
 #from BERT_CRF_INFERENCE import process_pdf_pipeline  # BERT_CRF_INFERENCE MODEL
 
-from matplotlib.cbook import CallbackRegistry
-from onnxruntime.tools.ort_format_model.ort_flatbuffers_py.fbs.Model import Model
 
-pytesseract.pytesseract.tesseract_cmd = r"./usr/bin/tesseract"
+#pytesseract.pytesseract.tesseract_cmd = r"./usr/bin/tesseract"
 
 app = Flask(__name__)
 CORS(app)
@@ -52,200 +47,7 @@ Helper Functions
 from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata
 from werkzeug.utils import secure_filename
 
-#
-# ==================================================
-#
-# GEMINI API FUNCTION
 
-# uncomment this entire text block and use your API-KEY to use Gemini AI to extract question and answers
-#this file is using our pre-trained model by default
-#
-# ===================================================
- #from examples.transformation.signature_method import model
-
-# genai.configure(api_key="test-key")
-# model = genai.GenerativeModel("gemini-2.0-flash")
-#
-
-# def encode_image_to_base64(image_path):
-#     with open(image_path, "rb") as img_file:
-#         return base64.b64encode(img_file.read()).decode("utf-8")
-#
-# def fix_indic_spacing(text):
-#     pattern = r'([\u0900-\u097F\u0A80-\u0AFF])\s+([\u0900-\u097F\u0A80-\u0AFF])'
-#     while re.search(pattern, text):
-#         text = re.sub(pattern, r'\1\2', text)
-#     return text
-# #
-# # Prompt for Gemini
-# def get_prompt(text):
-#     return f"""
-# You are given raw text or OCR content from a multiple-choice question (MCQ) document.
-#
-# 🔤 The questions and options may be written in English, Hindi, Gujarati, or other Indian languages.
-#
-# Some questions may include embedded images marked as:
-#     [IMAGE_QUESTION: filename.png]
-#
-# Each MCQ may appear in one of the following formats:
-# - Options labeled as A., B., C., D.
-# - a) / b) / c)
-# - 1. / 2. / 3. / 4.
-# - i. / ii. / iii. / iv.
-# - Or inside a table
-# - Or the correct answer appears later as:
-#   - ANSWER: B
-#   - Answer - C
-#
-# Your task is to extract **every complete MCQ** and convert it into valid JSON like this, i want noise to be classified as well:
-#
-# [
-#   {{
-#     "question": "What is bookkeeping?",
-#     "image": "page3_img1.png",  # Optional
-#     "noise" : "the following question paper is designed for IIT Roorkee" #noise that cannot be classified as either question/answer/options but preceeds that particular question
-#     "options": {{
-#       "A": "Records only income",
-#       "B": "Each entry has two sides",
-#       "C": "Tracks expenses only",
-#       "D": "Used for banks only"
-#     }},
-#     "answer": "B"
-#   }}
-# ]
-#
-# ✅ Rules:
-# - Normalize all option labels
-# - Remove newlines inside strings
-# - If a question has [IMAGE_QUESTION: xyz.png], extract the image name and include it in the `"image"` field.
-# - Return a valid JSON array only
-# - Each MCQ must have: question text, 2–4 options, and one correct answer
-# - If answer not immediately after the question, then look through the rest of the document for an 'answer key' present either at the end of a page or at the end of a section or the document and fill the answer field accordingly
-# - If text is from OCR and words appear stuck together (like ફસ્ર્લેડીકોનીપત્નીનેકહેવામાંઆવેછે),
-#   split or normalize them into natural readable words (e.g., "ફર્સ્ટ લેડીની પત્નીને કહેવામાં આવે છે")
-# Here is the text:
-#
-# {text}
-# """
-#
-#
-#
-# def extract_text_chunks(pdf_path, output_path="raw_text.txt", pages_per_chunk=10, overlap=2):
-#     """
-#     PDF extractor that saves the extracted text to a file.
-#     """
-#     image_counter = 1
-#     os.makedirs("static", exist_ok=True)
-#
-#     doc = fitz.open(pdf_path)
-#     i = 0
-#     full_text = []
-#
-#     while i < len(doc):
-#         chunk_texts = []
-#         for j in range(i, min(i + pages_per_chunk, len(doc))):
-#             page = doc[j]
-#             blocks = []
-#             is_mcq_page = False
-#
-#             # Enhanced text extraction with position tracking
-#             try:
-#                 page_dict = page.get_text("dict", sort=True)
-#                 for block in page_dict.get("blocks", []):
-#                     bbox = block.get("bbox", [0, 0, 0, 0])
-#                     sort_key = (bbox[1], bbox[0])
-#                     if block.get("type") == 0:  # Text block
-#                         text_block = ""
-#                         for line in block.get("lines", []):
-#                             for span in line.get("spans", []):
-#                                 text_block += span.get("text", "")
-#                             text_block += "\n"
-#                         text_block = text_block.strip()
-#                         if text_block:
-#                             if re.search(r'^[A-D][\.\)]\s', text_block, re.MULTILINE):
-#                                 is_mcq_page = True
-#                             blocks.append((sort_key, text_block, "text"))
-#                     elif block.get("type") == 1:  # Image block
-#                         try:
-#                             img_bytes = block.get("image")
-#                             if img_bytes:
-#                                 img_filename = f"img{image_counter}.png"
-#                                 img_path = os.path.join("static", img_filename)
-#                                 with open(img_path, "wb") as f:
-#                                     f.write(img_bytes)
-#                                 blocks.append((sort_key, f"[IMAGE: {img_filename}]", "image"))
-#                                 image_counter += 1
-#                         except Exception as e:
-#                             print(f"[Warning] Failed to save image on page {j + 1}: {e}")
-#             except Exception as e:
-#                 print(f"[Warning] Failed to parse layout on page {j + 1}: {e}")
-#
-#             # OCR fallback with position mapping
-#             if len(" ".join(t[1] for t in blocks if t[2] == "text").strip()) < 20 or is_mcq_page:
-#                 try:
-#                     pix = page.get_pixmap(dpi=600)
-#                     img_filename = f"page_{j + 1}_full.png"
-#                     img_path = os.path.join("static", img_filename)
-#                     pix.save(img_path)
-#                     img = Image.open(img_path).convert('L')
-#                     img = ImageEnhance.Contrast(img).enhance(3.0)
-#                     img = ImageEnhance.Sharpness(img).enhance(3.0)
-#                     processed_path = os.path.join("static", f"processed_{img_filename}")
-#                     img.save(processed_path)
-#                     custom_config = r"--psm 6 -l eng"
-#                     if is_mcq_page:
-#                         custom_config = r"--psm 4 -c preserve_interword_spaces=1"
-#                     ocr_data = pytesseract.image_to_data(
-#                         Image.open(processed_path),
-#                         config=custom_config,
-#                         output_type=pytesseract.Output.DICT
-#                     )
-#                     for k in range(len(ocr_data['text'])):
-#                         text = ocr_data['text'][k]
-#                         if text.strip():
-#                             x = ocr_data['left'][k]
-#                             y = ocr_data['top'][k]
-#                             blocks.append(((y, x), text, "ocr"))
-#                     os.remove(processed_path)
-#                 except Exception as e:
-#                     print(f"[Error] OCR failed on page {j + 1}: {e}")
-#
-#             # Precise sorting using coordinates
-#             try:
-#                 blocks.sort(key=lambda x: (x[0][0], x[0][1]))
-#                 page_text = []
-#                 current_line_y = -1
-#                 current_line = []
-#                 for pos, text, block_type in blocks:
-#                     y = pos[0]
-#                     if current_line_y < 0 or abs(y - current_line_y) < 15:
-#                         current_line.append(text)
-#                         current_line_y = y
-#                     else:
-#                         page_text.append(" ".join(current_line))
-#                         current_line = [text]
-#                         current_line_y = y
-#                 if current_line:
-#                     page_text.append(" ".join(current_line))
-#                 page_text = "\n".join(page_text)
-#                 if is_mcq_page:
-#                     page_text = re.sub(r'(\b[A-D]) (?=\w)', r'\1', page_text)
-#                     page_text = re.sub(r'([A-D])\.\s*\n\s*', r'\1. ', page_text)
-#             except Exception as e:
-#                 print(f"Sorting failed: {e}")
-#                 page_text = "\n".join(t[1] for t in blocks)
-#
-#             if page_text.strip():
-#                 chunk_texts.append(f"=== PAGE {j + 1} ===\n{page_text}")
-#         if chunk_texts:
-#             full_text.append("\n\n".join(chunk_texts))
-#         i += pages_per_chunk - overlap
-#     doc.close()
-#
-    # # Save the output to a file
-    # with open(output_path, "w", encoding="utf-8") as f:
-    #     f.write("\n\n".join(full_text))
-    # print(f"Successfully saved raw text to '{output_path}'.")
 
 
 def format_mcq(mcq):
@@ -261,7 +63,7 @@ def format_mcq(mcq):
 # uncomment the text below to use gemini pipeline instead of the pre-trained model
 # ===================================================
 
-pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
+#pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
 
 
 class Vocab:
@@ -320,8 +122,6 @@ def load_vocabs(path: str) -> Tuple[Vocab, Vocab]:
 
 
 
-
-
 UPLOAD_FOLDER = "uploaded_pdfs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -362,7 +162,7 @@ def upload_pdf():
 
     #raw_json_data, final_data, annotated_path = process_pdf_pipeline(input_pdf_path=file_path, model_path="./checkpoints/layoutlmv3_crf_new.pth") #UNCOMMENT THIS IF YOU WANT TO USE THE LAYOUTLMV3 script for inference
 
-    final_data =  process_pdf_pipeline(file_path) #huggingface API
+    final_data =  call_layoutlm_api(file_path) #huggingface API
 
     indexed_mcqs = []
     for i, mcq in enumerate(final_data):
@@ -945,7 +745,6 @@ def edit_paperset(testId):
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=True)
-
 
 
 
