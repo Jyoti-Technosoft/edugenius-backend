@@ -7,17 +7,18 @@
 # client.view_api()
 
 
-import json
 import os
-from gradio_client import Client
+import json
 from typing import Dict, Any, Tuple
+from gradio_client import Client
+
 
 
 # Define a custom ConnectionError or use a built-in one if needed.
 # Since we are using standard exceptions, we'll ensure we handle common ones.
 # Note: gradio_client will typically raise a ValueError or similar on connection failure.
 
-def process_pdf_pipeline(pdf_path: str) -> Dict[str, Any]:
+def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
     """
     Calls the heerjtdev/edugenius Hugging Face Space API to process a PDF.
 
@@ -81,3 +82,79 @@ def process_pdf_pipeline(pdf_path: str) -> Dict[str, Any]:
         return {"status_message": status_message, "raw_output": structured_mcq_output}
 
 
+
+
+
+def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
+    """
+    Calls the heerjtdev/LayoutLM-pdfparser Hugging Face Space API to process a PDF.
+
+    Args:
+        pdf_path: The local file path to the PDF document.
+
+    Returns:
+        A dictionary (JSON object) containing the parsed layout data.
+
+    Raises:
+        FileNotFoundError: If the PDF file doesn't exist.
+        ConnectionError: If the Space connection fails.
+        ValueError: If the API call fails due to invalid file or processing error.
+    """
+    # 1. Check if the local file exists
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"Local PDF file not found at: {pdf_path}")
+
+    # 2. Initialize the client with the Space's ID
+    try:
+        client = Client("heerjtdev/LayoutLM-pdfparser")
+    except Exception as e:
+        raise ConnectionError(f"Could not initialize connection to Hugging Face Space: {e}")
+
+    # 3. Call the prediction function using the confirmed api_name
+    print(f"Uploading and processing file: {pdf_path}...")
+
+    # Create the structured input dictionary (FileData)
+    # to satisfy the Gradio API's strict validation requirements
+    structured_file_input = {
+        "path": pdf_path,
+        "meta": {"_type": "gradio.FileData"}
+    }
+
+    try:
+        # Call the predict endpoint with the structured file input
+        response = client.predict(
+            structured_file_input,
+            api_name="/predict"
+        )
+    except Exception as e:
+        raise ValueError(f"API call failed during prediction phase: {e}")
+
+    # 4. Handle the response based on its type
+    # If the output is already a dict/list (from Json component), return it directly
+    if isinstance(response, (dict, list)):
+        return response
+
+    # If it's a tuple (multiple outputs), extract the main data
+    if isinstance(response, tuple):
+        # Assuming the parsed data is in the first or last element
+        for item in response:
+            if isinstance(item, (dict, list)):
+                return item
+            # Try parsing if it's a string
+            if isinstance(item, str):
+                try:
+                    return json.loads(item)
+                except json.JSONDecodeError:
+                    continue
+        # If no valid JSON found, return the whole tuple as dict
+        return {"raw_output": response}
+
+    # If it's a string, try to parse it as JSON
+    if isinstance(response, str):
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"raw_output": response}
+
+    # Fallback for unexpected output format
+    return {"raw_output": response}
