@@ -122,7 +122,7 @@ def load_vocabs(path: str) -> Tuple[Vocab, Vocab]:
 
 
 
-UPLOAD_FOLDER = "uploaded_pdfs"
+UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
@@ -134,16 +134,19 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route("/create_question_bank", methods=["POST"])
 def upload_pdf():
-    print("hello")
+    print("Starting and getting all the inputs")
     user_id = request.form.get("userId")
     title = request.form.get("title")
     description = request.form.get("description")
     pdf_file = request.files.get("pdf")
 
-    if not all([user_id, title, description, pdf_file]):
-        return jsonify({"error": "userId, title, description, and pdf file are required"}), 400
+    if not pdf_file:
+        return jsonify({"error": "I have not received/dont have access to the pdf file"}), 400
 
-    # Save PDF with original name + unique prefix
+    if not all([user_id, title, description]):
+        return jsonify({"error": "userId, title, description are required"}), 400
+
+    print("Save PDF with original name + unique prefix")
     original_name = secure_filename(pdf_file.filename)
 
     file_name = f"{original_name}"
@@ -152,7 +155,7 @@ def upload_pdf():
 
     createdAtTimestamp = datetime.now().isoformat()
 
-    # Extract and format MCQs
+    print("Extract and format Question Bank")
 
 #    final-data = extract_from_pdf(file_path) #uncomment this line and the rest of the code block when you want to use the gemini
 
@@ -163,6 +166,10 @@ def upload_pdf():
     #raw_json_data, final_data, annotated_path = process_pdf_pipeline(input_pdf_path=file_path, model_path="./checkpoints/layoutlmv3_crf_new.pth") #UNCOMMENT THIS IF YOU WANT TO USE THE LAYOUTLMV3 script for inference
 
     final_data =  call_layoutlm_api(file_path) #huggingface API
+
+
+
+    print("Storing Question Bank")
 
     indexed_mcqs = []
     for i, mcq in enumerate(final_data):
@@ -744,10 +751,4 @@ def edit_paperset(testId):
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
-
-
-
-
-
+    app.run(host="0.0.0.0", port=10000, debug=True)
