@@ -5,7 +5,7 @@ from base64 import b64encode
 import random
 import chromadb
 from chromadb.config import Settings
-
+import os
 from collections import OrderedDict
 from datetime import datetime
 
@@ -109,6 +109,14 @@ def ordered_mcq(mcq):
 
 
 def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
+    VECTORDB_PATH = "./chromadb_data"
+
+    # Step 0: Check if ChromaDB storage exists
+    if not os.path.exists(VECTORDB_PATH):
+        print(f"[ERROR] VectorDB storage not found at {VECTORDB_PATH}. Cannot store MCQs.")
+        raise FileNotFoundError(f"VectorDB storage missing at: {VECTORDB_PATH}")
+    else:
+        print(f"[INFO] VectorDB path verified: {VECTORDB_PATH}")
     generatedQAId = str(uuid.uuid4())
     userId = str(userId).strip()
     userIdClean = str(userId).strip().lower()
