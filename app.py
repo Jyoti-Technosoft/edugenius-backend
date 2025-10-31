@@ -11,7 +11,8 @@ from datetime import datetime
 import base64
 import random
 from gradio_api import call_edugenius_api, call_layoutlm_api
-
+from drive_uploader import upload_to_drive
+from io import BytesIO
 
 """
 ===========================================================
@@ -141,50 +142,49 @@ def upload_pdf():
     pdf_file = request.files.get("pdf")
 
     if not pdf_file:
-        return jsonify({"error": "I have not received/dont have access to the pdf file"}), 400
+        return jsonify({"error": "I have not received/don’t have access to the PDF file"}), 400
 
     if not all([user_id, title, description]):
         return jsonify({"error": "userId, title, description are required"}), 400
 
-    print("Save PDF with original name + unique prefix")
+    print("go Upload PDF directly to Google Drive")
     original_name = secure_filename(pdf_file.filename)
+    in_memory_file = BytesIO(pdf_file.read())  # keep in memory, not disk
+    print("Upload PDF directly to Google Drive successfully")
+    # Save the in-memory file to a temporary binary file to upload
+    temp_name = f"/tmp/{original_name}"
+    with open(temp_name, "wb") as temp:
+        temp.write(in_memory_file.getvalue())
 
-    file_name = f"{original_name}"
-    file_path = os.path.join(UPLOAD_FOLDER, file_name)
-    pdf_file.save(file_path)
+    file_id = upload_to_drive(temp_name)
+    file_url = f"https://drive.google.com/uc?id={file_id}"
+
+    # Clean memory and temp
+    try:
+        os.remove(temp_name)
+    except:
+        pass
 
     createdAtTimestamp = datetime.now().isoformat()
 
     print("Extract and format Question Bank")
-
-#    final-data = extract_from_pdf(file_path) #uncomment this line and the rest of the code block when you want to use the gemini
-
-#    final_data = process_pdf_to_json(file_path, labels_json_path="reference.json", model_dir="./CRF_BERT_MODEL")  ### UNCOMMENT THIS IF YOU WANT TO USE THE BERT_CRF MODEL
-
-#    final_data = process_pdf_pipeline(file_path, model_path="./output_data/model.pt", vocab_path= "./output_data/vocabs.pkl") #UNCOMMENT THIS IF YOU WANT TO HAVE THE 'model.pt' and 'vocab.pkl' file with you and want to run the inference locally
-
-    #raw_json_data, final_data, annotated_path = process_pdf_pipeline(input_pdf_path=file_path, model_path="./checkpoints/layoutlmv3_crf_new.pth") #UNCOMMENT THIS IF YOU WANT TO USE THE LAYOUTLMV3 script for inference
-
-    final_data =  call_layoutlm_api(file_path) #huggingface API
-
-
+    final_data = call_layoutlm_api(file_id)  # run API using Drive URL
 
     print("Storing Question Bank")
-
     indexed_mcqs = []
     for i, mcq in enumerate(final_data):
-        mcq['documentIndex'] = i  # Add the index here
+        mcq['documentIndex'] = i
         indexed_mcqs.append(mcq)
-    stored_id = store_mcqs(user_id, title, description, indexed_mcqs, file_name, createdAtTimestamp)
-
+    print(indexed_mcqs)
+    stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
 
     return Response(
         json.dumps({
             "generatedQAId": stored_id,
-            "userId":user_id,
-            "fileName": file_name,
+            "userId": user_id,
+            "fileName": original_name,
             "createdAt": createdAtTimestamp,
-
+            "driveFileUrl": file_url
         }, ensure_ascii=False),
         mimetype="application/json"
     )
