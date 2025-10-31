@@ -11,6 +11,7 @@ import os
 import json
 from typing import Dict, Any, Tuple
 from gradio_client import Client
+from drive_uploader import get_file_content_in_memory
 
 
 
@@ -101,60 +102,59 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
         ValueError: If the API call fails due to invalid file or processing error.
     """
     # 1. Check if the local file exists
-    if not os.path.exists(pdf_path):
-        raise FileNotFoundError(f"Local PDF file not found at: {pdf_path}")
 
-    # 2. Initialize the client with the Space's ID
+    """
+        Fetches PDF directly from Drive, loads in memory, and sends to the Hugging Face Space API.
+    """
+    print(f"Fetching file ID {pdf_path} from Drive...")
+    file_stream = get_file_content_in_memory(pdf_path)
+
+        # Save temporary in memory for API client compatibility
+    temp_path = "/tmp/temp_drive_file.pdf"
+    with open(temp_path, "wb") as f:
+         f.write(file_stream.read())
+
+    print("Calling LayoutLM API...")
     try:
         client = Client("heerjtdev/LayoutLM-pdfparser")
     except Exception as e:
-        raise ConnectionError(f"Could not initialize connection to Hugging Face Space: {e}")
+        raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
-    # 3. Call the prediction function using the confirmed api_name
-    print(f"Uploading and processing file: {pdf_path}...")
-
-    # Create the structured input dictionary (FileData)
-    # to satisfy the Gradio API's strict validation requirements
-    structured_file_input = {
-        "path": pdf_path,
-        "meta": {"_type": "gradio.FileData"}
-    }
+    structured_input = {
+         "path": temp_path,
+         "meta": {"_type": "gradio.FileData"}
+        }
 
     try:
-        # Call the predict endpoint with the structured file input
-        response = client.predict(
-            structured_file_input,
-            api_name="/predict"
-        )
+        response = client.predict(structured_input, api_name="/predict")
     except Exception as e:
-        raise ValueError(f"API call failed during prediction phase: {e}")
+        raise ValueError(f"LayoutLM API call failed: {e}")
 
-    # 4. Handle the response based on its type
-    # If the output is already a dict/list (from Json component), return it directly
+        # Clean up temp
+    try:
+        os.remove(temp_path)
+    except:
+        pass
+
+        # Normalize response
     if isinstance(response, (dict, list)):
         return response
 
-    # If it's a tuple (multiple outputs), extract the main data
     if isinstance(response, tuple):
-        # Assuming the parsed data is in the first or last element
         for item in response:
             if isinstance(item, (dict, list)):
                 return item
-            # Try parsing if it's a string
             if isinstance(item, str):
                 try:
                     return json.loads(item)
                 except json.JSONDecodeError:
-                    continue
-        # If no valid JSON found, return the whole tuple as dict
+                     continue
         return {"raw_output": response}
 
-    # If it's a string, try to parse it as JSON
     if isinstance(response, str):
         try:
             return json.loads(response)
         except json.JSONDecodeError:
-            return {"raw_output": response}
+             return {"raw_output": response}
 
-    # Fallback for unexpected output format
     return {"raw_output": response}
