@@ -135,6 +135,13 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route("/create_question_bank", methods=["POST"])
 def upload_pdf():
+    VECTORDB_PATH = "./chromadb_data"
+
+    # Step 0: Check if ChromaDB storage exists
+    if not os.path.exists(VECTORDB_PATH):
+        print(f"[ERROR] VectorDB storage not found at {VECTORDB_PATH}. Cannot store MCQs.")
+    else:
+        print(f"[INFO] VectorDB path verified: {VECTORDB_PATH}")
     print("Starting and getting all the inputs")
     user_id = request.form.get("userId")
     title = request.form.get("title")
@@ -175,9 +182,9 @@ def upload_pdf():
     for i, mcq in enumerate(final_data):
         mcq['documentIndex'] = i
         indexed_mcqs.append(mcq)
-    print(indexed_mcqs)
+    print("genrated mcqs successfully")
     stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
-
+    
     return Response(
         json.dumps({
             "generatedQAId": stored_id,
