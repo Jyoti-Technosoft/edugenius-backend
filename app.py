@@ -183,10 +183,16 @@ def upload_pdf():
         mcq['documentIndex'] = i
         indexed_mcqs.append(mcq)
     print("genrated mcqs successfully")
-    #stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
-    
+    stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
+
     return Response(
-        json.dumps(indexed_mcqs),
+        json.dumps({
+            "generatedQAId": stored_id,
+            "userId": user_id,
+            "fileName": original_name,
+            "createdAt": createdAtTimestamp,
+
+        }, ensure_ascii=False),
         mimetype="application/json"
     )
 
