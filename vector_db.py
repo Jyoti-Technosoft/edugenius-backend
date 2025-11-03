@@ -1,127 +1,92 @@
 
+# qdrant_mcq_db.py - converted from ChromaDB to Qdrant Cloud
+import os
 import uuid
 import json
-from base64 import b64encode
 import random
-import chromadb
-from chromadb.config import Settings
-import os
 from collections import OrderedDict
 from datetime import datetime
+from typing import List, Dict, Any
 
-client = chromadb.PersistentClient(
-    path="./chromadb_data",
-    settings=Settings()
-)
-
-collection_name = "mcq_collection"
-if collection_name in [c.name for c in client.list_collections()]:
-    collection = client.get_collection(name=collection_name)
-else:
-    collection = client.create_collection(name=collection_name)
-
-# New collection for storing generated tests
-test_sessions_collection_name = "test_sessions_collection"
-if test_sessions_collection_name in [c.name for c in client.list_collections()]:
-    test_sessions_collection = client.get_collection(name=test_sessions_collection_name)
-else:
-    test_sessions_collection = client.create_collection(name=test_sessions_collection_name)
-
-# # New collection for storing submitted_tests ( Future Scope for analysis and history keeping)
-submitted_tests_collection_name = "submitted_tests_collection"
-if submitted_tests_collection_name in [c.name for c in client.list_collections()]:
-    submitted_tests_collection = client.get_collection(name=submitted_tests_collection_name)
-else:
-    submitted_tests_collection = client.create_collection(name=submitted_tests_collection_name)
-
-
-# Create a new collection for storing individual questions
-questions_collection_name = "questions_collection"
-if questions_collection_name in [c.name for c in client.list_collections()]:
-    questions_collection = client.get_collection(name=questions_collection_name)
-else:
-    questions_collection = client.create_collection(name=questions_collection_name)
-
-
-
-# -----------------------------
-# Embedding model
-# -----------------------------
 import numpy as np
 
-# def embed(text: str):
-#     # return a 32-dim random vector to satisfy ChromaDB
-#     return np.random.rand(32).tolist()
+from qdrant_client import QdrantClient, models
 
+# Configuration - set these in your environment for Qdrant Cloud
+QDRANT_URL = "https://4c6c6f81-2667-44e1-bb76-cf28ea918153.us-west-2-0.aws.cloud.qdrant.io"  # change to your cluster URL
+QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.DDJW3ueFJwTFISJNYc5PysCBbpQTcacLi0FHW-1YzUw"
+VECTOR_DIM = 384
+DISTANCE = models.Distance.COSINE
+TIMEOUT = 60.0
 
-# def embed(texts):
-#     """
-#     Generate embeddings for ChromaDB.
-#     Accepts either a single string or a list of strings.
-#     Returns a list of embeddings (list of lists).
-#     """
-#     # Handle single string input
-#     if isinstance(texts, str):
-#         texts = [texts]
-#
-#     # Return list of 32-dim random vectors
-#     return [np.random.rand(32).tolist() for _ in texts]
-#
-# def embed(texts):
-#     """
-#     Generate embeddings for ChromaDB.
-#     Accepts either a single string or a list of strings.
-#     Returns a list of numpy arrays (ChromaDB will handle conversion).
-#     """
-#     # Handle single string input
-#     if isinstance(texts, str):
-#         texts = [texts]
-#
-#     # Return list of 32-dim numpy arrays (not converted to list)
-#     return [np.random.rand(32) for _ in texts]
+COLLECTION_MCQ = "mcq_collection"
+COLLECTION_QUESTIONS = "questions_collection"
+COLLECTION_TEST_SESSIONS = "test_sessions_collection"
+COLLECTION_SUBMITTED = "submitted_tests_collection"
 
+client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
+
+def ensure_collections():
+    existing = [c.name for c in client.get_collections().collections]
+    vector_params = models.VectorParams(size=VECTOR_DIM, distance=DISTANCE)
+
+    if COLLECTION_MCQ not in existing:
+        client.create_collection(collection_name=COLLECTION_MCQ, vectors=vector_params, default_payload_schema={
+            "generatedQAId": models.PayloadSchemaType.KEYWORD, "userId": models.PayloadSchemaType.KEYWORD
+        })
+    if COLLECTION_QUESTIONS not in existing:
+        client.create_collection(collection_name=COLLECTION_QUESTIONS, vectors=vector_params, default_payload_schema={
+            "generatedQAId": models.PayloadSchemaType.KEYWORD, "userId": models.PayloadSchemaType.KEYWORD, "questionId": models.PayloadSchemaType.KEYWORD
+        })
+    if COLLECTION_TEST_SESSIONS not in existing:
+        client.create_collection(collection_name=COLLECTION_TEST_SESSIONS, vectors=vector_params, default_payload_schema={
+            "userId": models.PayloadSchemaType.KEYWORD, "testId": models.PayloadSchemaType.KEYWORD
+        })
+    if COLLECTION_SUBMITTED not in existing:
+        client.create_collection(collection_name=COLLECTION_SUBMITTED, vectors=vector_params, default_payload_schema={
+            "userId": models.PayloadSchemaType.KEYWORD, "testId": models.PayloadSchemaType.KEYWORD
+        })
+
+    def _safe_index(col, field):
+        try:
+            client.create_payload_index(collection_name=col, field_name=field, field_schema=models.PayloadSchemaType.KEYWORD)
+        except Exception:
+            pass
+
+    _safe_index(COLLECTION_MCQ, "generatedQAId")
+    _safe_index(COLLECTION_MCQ, "userId")
+    _safe_index(COLLECTION_QUESTIONS, "generatedQAId")
+    _safe_index(COLLECTION_QUESTIONS, "userId")
+    _safe_index(COLLECTION_QUESTIONS, "questionId")
+    _safe_index(COLLECTION_TEST_SESSIONS, "userId")
+    _safe_index(COLLECTION_TEST_SESSIONS, "testId")
+    _safe_index(COLLECTION_SUBMITTED, "userId")
+    _safe_index(COLLECTION_SUBMITTED, "testId")
+
+ensure_collections()
 
 def embed(texts):
-    """
-    Generate embeddings for ChromaDB.
-    Accepts either a single string or a list of strings.
-    Returns a list of embeddings as nested Python lists (not numpy arrays).
-    """
-    # Handle single string input
     if isinstance(texts, str):
         texts = [texts]
+    return [np.random.rand(VECTOR_DIM).tolist() for _ in texts]
 
-    # Return list of 32-dim vectors as Python lists
-    return [np.random.rand(32).tolist() for _ in texts]
+def _to_payload_for_bank(meta: Dict[str, Any]):
+    p = dict(meta)
+    for k, v in list(p.items()):
+        if isinstance(v, (dict, list)):
+            p[k] = json.dumps(v)
+    return p
 
-
-def ordered_mcq(mcq):
-    return OrderedDict([
-        ("questionId", str(uuid.uuid4())),
-        ("question", mcq.get("question") or ""),
-        ("noise", mcq.get("noise") or ""),
-        ("image", mcq.get("image") or None),
-        ("options", mcq.get("options") or {}),
-        ("answer", mcq.get("answer") or "")
-    ])
-
-
-
+def _to_payload_for_question(meta: Dict[str, Any]):
+    p = dict(meta)
+    if "options" in p and not isinstance(p["options"], str):
+        p["options"] = json.dumps(p["options"])
+    return p
 
 def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
-    VECTORDB_PATH = "./chromadb_data"
-
-    # Step 0: Check if ChromaDB storage exists
-    if not os.path.exists(VECTORDB_PATH):
-        print(f"[ERROR] VectorDB storage not found at {VECTORDB_PATH}. Cannot store MCQs.")
-        raise FileNotFoundError(f"VectorDB storage missing at: {VECTORDB_PATH}")
-    else:
-        print(f"[INFO] VectorDB path verified: {VECTORDB_PATH}")
-    generatedQAId = str(uuid.uuid4())
-    userId = str(userId).strip()
     userIdClean = str(userId).strip().lower()
+    generatedQAId = str(uuid.uuid4())
 
-    # Step 1: Store the question bank's metadata in the original collection
     metadata_for_bank = {
         "userId": userIdClean,
         "title": title,
@@ -130,293 +95,273 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
         "file_name": pdf_file,
         "createdAt": createdAt
     }
-    # Using a simple string for embedding, as per your original code
-# CORRECTED CODE
-    text_for_embedding = f"{title} {description}"
-    embeddings = embed(text_for_embedding)
-    
-    collection.add(
-        ids=[generatedQAId],
-        documents=[userIdClean],
-        embeddings=embeddings,
-        metadatas=[metadata_for_bank]
-    )
 
-    # Step 2: Store each individual question in the new 'questions_collection'
-    question_ids = []
-    question_metadatas = []
-    question_documents = []
+    bank_vector = embed(f"{title} {description}")[0]
+    bank_point = models.PointStruct(id=generatedQAId, vector=bank_vector, payload=_to_payload_for_bank(metadata_for_bank))
+    client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
 
-
+    question_points = []
     for i, mcq in enumerate(mcqs):
         questionId = str(uuid.uuid4())
-        question_ids.append(questionId)
-
-        # Add a reference to the question bank
         mcq['generatedQAId'] = generatedQAId
         mcq['questionId'] = questionId
         mcq['userId'] = userIdClean
-        # CRITICAL FIX: Store the sequential index
         mcq['documentIndex'] = i
 
-        # Convert the 'options' dictionary to a JSON string
         options_json = json.dumps(mcq.get("options", {}))
+        question_text = mcq.get("question", "") or ""
+        q_vec = embed(question_text)[0]
 
-        # Append the question text to the documents list
-        question_documents.append(mcq.get("question") or "")
-
-        # Create an ordered dictionary with the core data
-        mcq_ordered = OrderedDict([
-            ("questionId", mcq.get("questionId")),
-            ("generatedQAId", mcq.get("generatedQAId")),
-            ("userId", mcq.get("userId")),
-            ("question", mcq.get("question") or ""),
-            ("noise", mcq.get("noise") or ""),
-            ("image", mcq.get("image") or None),
+        q_meta = OrderedDict([
+            ("questionId", questionId),
+            ("generatedQAId", generatedQAId),
+            ("userId", userIdClean),
+            ("question", mcq.get("question", "")),
+            ("noise", mcq.get("noise", "")),
+            ("image", mcq.get("image")),
             ("options", options_json),
-            ("answer", mcq.get("answer") or ""),
-            ("documentIndex", mcq.get("documentIndex"))  # CRITICAL FIX: Include the index
+            ("answer", mcq.get("answer", "")),
+            ("documentIndex", i)
         ])
 
-        # Filter out keys with None values before adding to metadata
-        filtered_metadata = {k: v for k, v in mcq_ordered.items() if v is not None}
-        question_metadatas.append(filtered_metadata)
+        point = models.PointStruct(id=questionId, vector=q_vec, payload=_to_payload_for_question(q_meta))
+        question_points.append(point)
 
+        if len(question_points) >= 256:
+            client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
+            question_points = []
 
-    questions_collection.add(
-        ids=question_ids,
-        documents=question_documents,
-        metadatas=question_metadatas
-    )
+    if question_points:
+        client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
 
     return generatedQAId
 
-
 def fetch_mcqs(userId: str = None, generatedQAId: str = None):
-    """
-    Fetch MCQs and return the full record from the new collections,
-    with fields consistently ordered for readability.
-    """
-    if not userId and not generatedQAId:
-        print("[DEBUG] Either userId or generatedQAId must be provided.")
-        return []
+    results = []
 
-    results = None
+    # 🟢 Fetch by generatedQAId
     if generatedQAId:
-        results = collection.get(ids=[generatedQAId], include=["documents", "metadatas"])
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))
+            ]
+        )
+        dummy_vector = [0.0] * VECTOR_DIM
 
-    elif userId:
-        # Keep this lowercase, as it's stored in metadata as lowercase
-        userIdClean = str(userId).strip().lower()
-        results = collection.get(where={"userId": userIdClean}, include=["documents", "metadatas"])
+        # Fetch parent bank (metadata)
+        bank_hits = client.search(
+            collection_name=COLLECTION_MCQ,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=1,
+            with_payload=True
+        )
+        if not bank_hits:
+            return []
 
-    if not results or not results.get("ids"):
-        return []
+        bank = bank_hits[0].payload
+        if not bank:
+            return []
 
-    data = []
-    for i in range(len(results["ids"])):
-        meta = results["metadatas"][i].copy()
-        generatedQAId_from_meta = meta.get("generatedQAId")
+        # Fetch all questions belonging to this generatedQAId
+        hits = client.scroll(
+            collection_name=COLLECTION_QUESTIONS,
+            scroll_filter=filt,
+            limit=1000,
+            with_payload=True,
+        )[0]  # first element = list of points
 
-        if generatedQAId_from_meta:
-            # Note: Fetching questions from questions_collection.
-            questions_results = questions_collection.get(where={"generatedQAId": generatedQAId_from_meta},
-                                                         include=["metadatas"])
+        mcq_list = []
+        for h in hits:
+            payload = h.payload if hasattr(h, "payload") else h.get("payload", {})
+            if payload and "options" in payload and isinstance(payload["options"], str):
+                try:
+                    payload["options"] = json.loads(payload["options"])
+                except Exception:
+                    pass
 
-            mcq_list = []
-            if questions_results.get("metadatas"):
-                for q_metadata in questions_results["metadatas"]:
+            ordered_mcq = OrderedDict([
+                ("questionId", payload.get("questionId")),
+                ("generatedQAId", payload.get("generatedQAId")),
+                ("userId", payload.get("userId")),
+                ("question", payload.get("question")),
+                ("options", payload.get("options")),
+                ("answer", payload.get("answer")),
+                ("noise", payload.get("noise")),
+                ("image", payload.get("image")),
+                ("documentIndex", payload.get("documentIndex")),
+            ])
+            mcq_list.append(ordered_mcq)
 
-                    #  Revert to json.loads() because store_mcqs used json.dumps()
-                    if "options" in q_metadata and isinstance(q_metadata["options"], str):
-                        try:
-                            q_metadata["options"] = json.loads(q_metadata["options"])
-                        except json.JSONDecodeError as e:
-                            # Log the error, but don't crash the API
-                            print(
-                                f"[ERROR] JSON decode failed for options on question {q_metadata.get('questionId')}: {e}")
-                            q_metadata["options"] = {}  # Default to an empty dictionary or list
+        mcq_list = sorted(mcq_list, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+        bank["mcqs"] = mcq_list
 
-                    # Ensure the data is ordered for a consistent output format
-                    ordered_mcq = OrderedDict([
-                        ("questionId", q_metadata.get("questionId")),
-                        ("generatedQAId", q_metadata.get("generatedQAId")),
-                        ("userId", q_metadata.get("userId")),
-                        ("question", q_metadata.get("question")),
-                        ("options", q_metadata.get("options")),
-                        ("answer", q_metadata.get("answer")),
-                        ("noise", q_metadata.get("noise")),
-                        ("image", q_metadata.get("image")),
-                        ("documentIndex", q_metadata.get("documentIndex"))
-                    ])
-                    mcq_list.append(ordered_mcq)
-
-            # Sort by the explicit documentIndex
-            mcq_list = sorted(
-                mcq_list,
-                key=lambda x: int(x['documentIndex']) if x.get('documentIndex') is not None else float('inf')
-            )
-        else:
-            mcq_list = []
-
-        meta["mcqs"] = mcq_list
-        data.append({
-            "id": results["ids"][i],
-            "document": results["documents"][i],
-            "metadata": meta
+        results.append({
+            "id": generatedQAId,
+            "document": bank.get("title", ""),
+            "metadata": bank
         })
-    return data
+        return results
 
+    # 🟢 Fetch all MCQ banks by userId
+    elif userId:
+        userIdClean = str(userId).strip().lower()
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
+            ]
+        )
+        dummy_vector = [0.0] * VECTOR_DIM
+        banks = client.search(
+            collection_name=COLLECTION_MCQ,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=1000,
+            with_payload=True,
+        )
+        for b in banks:
+            payload = b.payload if hasattr(b, "payload") else b.get("payload", {})
+            gen = payload.get("generatedQAId")
+            if gen:
+                fetched = fetch_mcqs(generatedQAId=gen)
+                if fetched:
+                    results.extend(fetched)
+        return results
 
+    return []
 
 def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
-    """
-    Fetches a random sample of MCQs for a given generatedQAId from the new collections.
-    """
-    # 1. Call fetch_mcqs. It now returns questions sorted by documentIndex.
-    results = fetch_mcqs(generatedQAId=generatedQAId)
-
-    if not results:
+    records = fetch_mcqs(generatedQAId=generatedQAId)
+    if not records:
         return []
-
-    # 2. Access the list of MCQs from the 'metadata' key
-    record = results[0]
+    record = records[0]
     original_mcqs = record.get("metadata", {}).get("mcqs", [])
-
     if not original_mcqs:
         return []
-
-    # 3. Handle random sampling if num_questions is specified
-    selected_mcqs = original_mcqs
+    selected = original_mcqs
     if num_questions and num_questions < len(original_mcqs):
-        # NOTE: If we want the final test to be a random *selection* but *sorted* by the original order,
-        # we'd select here, then re-sort by index. But for a random *test*, we usually want random order.
-        # Since this function is for generating a test, we will keep the random sample,
-        # and then shuffle the options.
-        selected_mcqs = random.sample(original_mcqs, num_questions)
-
-    # 4. Shuffle the options within each selected MCQ
-    formatted_mcqs = []
-    for mcq in selected_mcqs:
-        shuffled_mcq = mcq.copy()
-
-        # Options should already be a dictionary because of the logic in fetch_mcqs,
-        # but we check and parse just in case.
-        options = shuffled_mcq.get("options", {})
+        selected = random.sample(original_mcqs, num_questions)
+    formatted = []
+    for mcq in selected:
+        mcq_copy = mcq.copy()
+        options = mcq_copy.get("options", {})
         if isinstance(options, str):
             try:
                 options = json.loads(options)
-            except json.JSONDecodeError:
+            except Exception:
                 options = {}
-
-        # Shuffle the options and re-create the dictionary to maintain order
-        option_items = list(options.items())
-        random.shuffle(option_items)
-        shuffled_mcq["options"] = OrderedDict(option_items)
-
-        formatted_mcqs.append(shuffled_mcq)
-
-    # 5. Re-assemble the data in the exact format of fetch_mcqs
-    record["metadata"]["mcqs"] = formatted_mcqs
-
+        items = list(options.items())
+        random.shuffle(items)
+        mcq_copy["options"] = OrderedDict(items)
+        formatted.append(mcq_copy)
+    record["metadata"]["mcqs"] = formatted
     return [record]
 
-
-
-
-
-def store_test_session(userId, testId, testTitle,totalTime, createdAt, mcqs_data):
-    """
-    Stores a specific test session with its questions in the dedicated collection.
-    Returns True on success, False on failure.
-    """
+def store_test_session(userId, testId, testTitle, totalTime, createdAt, mcqs_data):
     try:
-        mcqs_json = json.dumps(mcqs_data)
-        metadata = {
-            "userId": userId,
-            "testTitle": testTitle,
-            "totalTime": totalTime,
-            "createdAt": createdAt,
-            "questions": mcqs_json  # Store the questions as a JSON string
-
-        }
-        test_sessions_collection.add(
-            ids=[testId],
-            documents=[f"Test session for user {userId}"],
-            metadatas=[metadata]
-        )
-        print(f"[DEBUG] Stored test session with ID: {testId}")
+        userIdClean = str(userId).strip().lower()
+        payload = {"userId": userIdClean, "testTitle": testTitle, "totalTime": totalTime, "createdAt": createdAt, "questions": json.dumps(mcqs_data), "testId": testId}
+        vec = embed(f"test_session:{testId}")[0]
+        p = models.PointStruct(id=testId, vector=vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_TEST_SESSIONS, points=[p])
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to store test session: {e}")
+        print("store_test_session error:", e)
         return False
 
+def _extract_payload(point):
+    """Safely extract payload from a qdrant point that may be either an object or a dict."""
+    if not point:
+        return {}
+    # record-like object with .payload
+    payload = getattr(point, "payload", None)
+    if payload is not None:
+        return payload or {}
+    # dict-like
+    if isinstance(point, dict):
+        return point.get("payload", {}) or {}
+    return {}
 
+def _extract_id(point):
+    """Safely extract id from qdrant point (object or dict)."""
+    if not point:
+        return None
+    pid = getattr(point, "id", None)
+    if pid is not None:
+        return pid
+    if isinstance(point, dict):
+        return point.get("id")
+    return None
+
+def _normalize_scroll_result(res):
+    """
+    client.scroll may return a list or a tuple where first element is points list.
+    Normalize to a flat list of points/dicts.
+    """
+    if res is None:
+        return []
+    if isinstance(res, (list, tuple)) and len(res) > 0:
+        # common qdrant pattern: ([points], next_page)
+        if isinstance(res[0], list):
+            return res[0]
+        # sometimes it's directly list of points
+        return list(res)
+    # fallback single point
+    return [res]
+
+def _ensure_json_field(payload, key):
+    """If payload[key] is a JSON-encoded string, decode it; otherwise leave as-is."""
+    if key in payload and isinstance(payload[key], str):
+        try:
+            payload[key] = json.loads(payload[key])
+        except Exception:
+            # keep original string if it fails
+            payload[key] = payload[key]
+    return payload
+
+# ---------- Functions (rewritten) ----------
 
 def fetch_test_by_testId(testId):
-    """
-    Fetches a specific test session by its ID and returns the complete data.
-    """
     try:
-        results = test_sessions_collection.get(ids=[testId], include=["metadatas"])
-        if not results or not results["ids"]:
-            return None
-
-        metadata = dict(results["metadatas"][0])
-
-        # Parse the JSON string back into a list of questions
-        if "questions" in metadata:
-            try:
-                metadata["questions"] = json.loads(metadata["questions"])
-            except json.JSONDecodeError:
-                metadata["questions"] = []
-
-        # Return the full record
-        return metadata
+        p = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
+        payload = _extract_payload(p)
+        payload = _ensure_json_field(payload, "questions")
+        # ensure testId present
+        payload["testId"] = payload.get("testId") or _extract_id(p)
+        return payload
     except Exception as e:
-        print(f"[ERROR] Failed to fetch test: {e}")
+        print("fetch_test_by_testId error:", e)
         return None
-
 
 def test_sessions_by_userId(userId):
-    """
-    Fetches all test sessions for a given userId with all their details (questions, answers, etc.).
-    """
     try:
-        results = test_sessions_collection.get(where={"userId": userId}, include=["metadatas"])
-        if not results or not results["ids"]:
-            return []
-
-        test_sessions = []
-        for i in range(len(results["ids"])):
-            session_data = dict(results["metadatas"][i])
-            session_data["testId"] = results["ids"][i]
-
-            # Parse the questions JSON string back into a list of questions
-            if "questions" in session_data:
-                try:
-                    session_data["questions"] = json.loads(session_data["questions"])
-                except json.JSONDecodeError:
-                    session_data["questions"] = []
-
-            test_sessions.append(session_data)
-
-        return test_sessions
+        userIdClean = str(userId).strip().lower()
+        filt = models.Filter(must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))])
+        # Using dummy vector because search requires a vector query in your client usage
+        dummy_vector = [0.0] * VECTOR_DIM
+        hits = client.search(
+            collection_name=COLLECTION_TEST_SESSIONS,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=1000,
+            with_payload=True
+        )
+        sessions = []
+        for h in hits:
+            payload = _extract_payload(h)
+            payload = _ensure_json_field(payload, "questions")
+            payload["testId"] = payload.get("testId") or _extract_id(h)
+            sessions.append(payload)
+        return sessions
     except Exception as e:
-        print(f"[ERROR] Failed to fetch test sessions for user: {e}")
+        print("test_sessions_by_userId error:", e)
         return None
 
-
-def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,  detailed_results,
-                         score, total_questions):
-    """
-    Stores the results of a submitted test.
-    Returns True on success, False on failure.
-    """
+def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions):
     try:
-        results_json = json.dumps(detailed_results)
-        metadata = {
-            "userId": userId,
+        userIdClean = str(userId).strip().lower()
+        payload = {
+            "userId": userIdClean,
             "testId": testId,
             "testTitle": testTitle,
             "timeSpent": timeSpent,
@@ -424,409 +369,242 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "submittedAt": submittedAt,
             "score": score,
             "total_questions": total_questions,
-            "detailed_results": results_json  # Store the detailed results as a JSON string
+            "detailed_results": json.dumps(detailed_results)
         }
-        submitted_tests_collection.add(
-            ids=[testId],
-            documents=[f"Submitted test for user {userId}"],
-            metadatas=[metadata]
-        )
-        print(f"[DEBUG] Stored submitted test with ID: {testId}")
+        vec = embed(f"submitted_test:{testId}")[0]
+        p = models.PointStruct(id=testId, vector=vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to store submitted test: {e}")
+        print("store_submitted_test error:", e)
         return False
-
 
 def submitted_tests_by_userId(userId):
-    """
-    Fetches all submitted test sessions for a given userId.
-    """
     try:
-        results = submitted_tests_collection.get(where={"userId": userId}, include=["metadatas"])
-        if not results or not results["ids"]:
-            return []
-
-        submitted_sessions = []
-        for i in range(len(results["ids"])):
-            session_data = dict(results["metadatas"][i])
-            # The testId is the document ID in this case
-            session_data["testId"] = results["ids"][i]
-
-            # Parse the detailed_results JSON string back into a list
-            if "detailed_results" in session_data:
+        userIdClean = str(userId).strip().lower()
+        filt = models.Filter(must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))])
+        dummy_vector = [0.0] * VECTOR_DIM
+        hits = client.search(
+            collection_name=COLLECTION_SUBMITTED,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=1000,
+            with_payload=True
+        )
+        sessions = []
+        for h in hits:
+            payload = _extract_payload(h)
+            if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
                 try:
-                    session_data["detailed_results"] = json.loads(session_data["detailed_results"])
-                except json.JSONDecodeError:
-                    session_data["detailed_results"] = []
-
-            submitted_sessions.append(session_data)
-
-        return submitted_sessions
+                    payload["detailed_results"] = json.loads(payload["detailed_results"])
+                except Exception:
+                    payload["detailed_results"] = payload["detailed_results"]
+            payload["testId"] = payload.get("testId") or _extract_id(h)
+            sessions.append(payload)
+        return sessions
     except Exception as e:
-        print(f"[ERROR] Failed to fetch submitted test sessions for user: {e}")
+        print("submitted_tests_by_userId error:", e)
         return None
 
-
-
-
-
-
 def delete_single_question(questionId):
-    """
-    Deletes a single question by its unique ID.
-    Returns True on success, False on failure.
-    """
     try:
-        # ChromaDB's delete operation
-        questions_collection.delete(ids=[questionId])
-        print(f"[DEBUG] Successfully deleted question with ID: {questionId}")
+        client.delete(collection_name=COLLECTION_QUESTIONS, points=[questionId])
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to delete single question: {e}")
+        print("delete_single_question error:", e)
         return False
-
-
-
-
 
 def update_single_question(questionId, updated_data):
-    """
-    Updates a single question by its unique ID.
-    Returns True on success, False on failure.
-    """
     try:
-        # Fetch the existing record to get its generatedQAId and userId
-        existing_record = questions_collection.get(ids=[questionId], include=["metadatas"])
-        if not existing_record or not existing_record.get("ids"):
+        existing = client.get_point(collection_name=COLLECTION_QUESTIONS, point_id=questionId, with_payload=True)
+        if not existing:
             return False
-
-        existing_meta = existing_record["metadatas"][0]
-
-        # Preserve the existing metadata fields
+        existing_payload = _extract_payload(existing)
+        # preserve important ids
         updated_data['questionId'] = questionId
-        updated_data['generatedQAId'] = existing_meta.get("generatedQAId")
-        updated_data['userId'] = existing_meta.get("userId")
-
-        #  Convert the Python dict for 'options' to a JSON string
-        if 'options' in updated_data and isinstance(updated_data['options'], dict):
-            updated_data['options'] = json.dumps(updated_data['options'])
-        # Handle the case where the key might be missing or is None
-        elif 'options' in updated_data and updated_data['options'] is None:
-            updated_data['options'] = json.dumps({})
-
-        # The ChromaDB upsert call requires a documents parameter, even if empty
-        questions_collection.upsert(
-            ids=[questionId],
-            metadatas=[updated_data],
-            documents=[""] # Added in an earlier step to satisfy ChromaDB
-        )
-        print(f"[DEBUG] Successfully updated question with ID: {questionId}")
+        updated_data['generatedQAId'] = existing_payload.get("generatedQAId")
+        updated_data['userId'] = existing_payload.get("userId")
+        # normalize options
+        if 'options' in updated_data:
+            if isinstance(updated_data['options'], (dict, list)):
+                updated_data['options'] = json.dumps(updated_data['options'])
+            elif updated_data['options'] is None:
+                updated_data['options'] = json.dumps({})
+        payload = _to_payload_for_question(updated_data)
+        vec = embed(updated_data.get("question", ""))[0]
+        p = models.PointStruct(id=questionId, vector=vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_QUESTIONS, points=[p])
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to update single question: {e}")
+        print("update_single_question error:", e)
         return False
-
 
 def add_single_question(generatedQAId, question_data):
-    """
-    Stores a single question and links it to a generatedQAId.
-    Returns True on success, False on failure.
-    """
     try:
-        # Check if the question bank exists
-        existing_qb_data = collection.get(ids=[generatedQAId], include=["metadatas"])
-        if not existing_qb_data or not existing_qb_data.get("ids"):
-            print(f"[ERROR] Question bank with ID '{generatedQAId}' not found.")
+        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        if not bank:
+            print(f"Question bank {generatedQAId} not found")
             return False
-
+        bank_payload = _extract_payload(bank)
         questionId = str(uuid.uuid4())
-
-        # 1. Inject mandatory IDs
         question_data['questionId'] = questionId
         question_data['generatedQAId'] = generatedQAId
-        question_data['userId'] = existing_qb_data.get('metadatas', [{}])[0].get('userId', 'unknown')
-
-        # 2. Extract the question text for the 'documents' field
-        question_text = question_data.get('question', '')
-
-        # 3. Convert options to JSON string for metadata compatibility
+        question_data['userId'] = bank_payload.get("userId") or "unknown"
+        question_text = question_data.get("question", "") or ""
         if 'options' in question_data and isinstance(question_data['options'], (dict, list)):
             question_data['options'] = json.dumps(question_data['options'])
-
-        # Filter out keys with None values before adding to metadata
         filtered_metadata = {k: v for k, v in question_data.items() if v is not None}
-
-        #  Add the 'documents' argument
-        questions_collection.add(
-            ids=[questionId],
-            documents=[question_text],  # <-- PROVIDED THE QUESTION TEXT HERE
-            metadatas=[filtered_metadata]
-        )
-        print(f"[DEBUG] Added new question with ID: {questionId} to question bank: {generatedQAId}")
+        payload = _to_payload_for_question(filtered_metadata)
+        vec = embed(question_text)[0]
+        p = models.PointStruct(id=questionId, vector=vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_QUESTIONS, points=[p])
         return True
-
     except Exception as e:
-        print(f"[ERROR] Failed to add single question: {e}")
+        print("add_single_question error:", e)
         return False
-
-
-
-
 
 def store_mcqs_for_manual_creation(userId, title, description, mcqs):
-    """
-    Stores a manually created question bank.
-    This logic is based on the original store_mcqs but handles internal IDs and metadata.
-    """
-    generatedQAId = str(uuid.uuid4())
-    userId = str(userId).strip().lower()
-    createdAt = datetime.now().isoformat()
-    pdf_file = "MANUAL_CREATION"  # Fixed identifier
+    try:
+        generatedQAId = str(uuid.uuid4())
+        userIdClean = str(userId).strip().lower()
+        createdAt = datetime.now().isoformat()
+        pdf_file = "MANUAL_CREATION"
+        metadata_for_bank = {
+            "userId": userIdClean,
+            "title": title,
+            "generatedQAId": generatedQAId,
+            "description": description,
+            "file_name": pdf_file,
+            "createdAt": createdAt
+        }
+        bank_vector = embed(f"{title} {description}")[0]
+        bank_point = models.PointStruct(id=generatedQAId, vector=bank_vector, payload=_to_payload_for_bank(metadata_for_bank))
+        client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
 
-    # Step 1: Store the question bank's metadata in the original collection
-    metadata_for_bank = {
-        "userId": userId,
-        "title": title,
-        "generatedQAId": generatedQAId,
-        "description": description,
-        "file_name": pdf_file,
-        "createdAt": createdAt
-    }
-    text_for_embedding = f"{title} {description} manual question bank"
-    embeddings = embed(text_for_embedding)
+        points = []
+        for mcq in mcqs:
+            questionId = str(uuid.uuid4())
+            mcq['generatedQAId'] = generatedQAId
+            mcq['questionId'] = questionId
+            mcq['userId'] = userIdClean
+            options_data = mcq.get("options", "{}")
+            question_text = mcq.get("question", "") or ""
+            q_meta = OrderedDict([
+                ("questionId", questionId),
+                ("generatedQAId", generatedQAId),
+                ("userId", userIdClean),
+                ("question", mcq.get("question") or ""),
+                ("noise", mcq.get("noise") or None),
+                ("image", mcq.get("image") or None),
+                ("options", options_data),
+                ("answer", mcq.get("answer") or ""),
+                ("documentIndex", mcq.get("documentIndex"))
+            ])
+            payload = _to_payload_for_question(q_meta)
+            vec = embed(question_text)[0]
+            p = models.PointStruct(id=questionId, vector=vec, payload=payload)
+            points.append(p)
 
-    collection.add(
-        ids=[generatedQAId],
-        documents=[title],
-        embeddings=embeddings,
-        metadatas=[metadata_for_bank]
-    )
-
-    # Step 2: Store each individual question in the 'questions_collection'
-    question_ids = []
-    question_metadatas = []
-    question_documents = []
-
-    for mcq in mcqs:
-        questionId = str(uuid.uuid4())
-        question_ids.append(questionId)
-
-        # Inject/Confirm essential metadata
-        mcq['generatedQAId'] = generatedQAId
-        mcq['questionId'] = questionId
-        mcq['userId'] = userId
-
-        # The 'options' should already be a JSON string here due to API preprocessing.
-        options_data = mcq.get("options", "{}")
-
-        # Append the question text to the documents list
-        question_documents.append(mcq.get("question") or "")
-
-        # Create an ordered dictionary with the core data
-        mcq_ordered = OrderedDict([
-            ("questionId", mcq.get("questionId")),
-            ("generatedQAId", mcq.get("generatedQAId")),
-            ("userId", mcq.get("userId")),
-            ("question", mcq.get("question") or ""),
-            ("noise", mcq.get("noise") or None),
-            ("image", mcq.get("image") or None),
-            ("options", options_data),  # Use the pre-processed string
-            ("answer", mcq.get("answer") or ""),
-            ("documentIndex", mcq.get("documentIndex"))
-        ])
-
-        filtered_metadata = {k: v for k, v in mcq_ordered.items() if v is not None}
-        question_metadatas.append(filtered_metadata)
-
-    questions_collection.add(
-        ids=question_ids,
-        documents=question_documents,
-        metadatas=question_metadatas
-    )
-
-    return generatedQAId
-
-
-import uuid
-
-
-
-
+        if points:
+            client.upsert(collection_name=COLLECTION_QUESTIONS, points=points)
+        return generatedQAId
+    except Exception as e:
+        print("store_mcqs_for_manual_creation error:", e)
+        return None
 
 def delete_mcq_bank(generatedQAId):
-    """
-    Deletes an entire question bank and all its associated questions from ChromaDB.
-
-    Args:
-        generatedQAId (str): The unique ID of the question bank to delete.
-
-    Returns:
-        bool: True if deletion was attempted for all components, False if the
-              main question bank was not initially found.
-    """
     try:
-        # 1. Check if the main question bank exists in the metadata collection.
-        # This acts as a check before proceeding to delete thousands of questions.
-        bank_exists = collection.get(ids=[generatedQAId], include=[])
-        if not bank_exists or not bank_exists.get("ids"):
-            print(f"[WARN] Question bank metadata ID '{generatedQAId}' not found in mcq_collection.")
+        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        if not bank:
+            print("bank not found")
             return False
-
-        # --- Delete Associated Questions (questions_collection) ---
-
-        # NOTE: ChromaDB's delete operation requires a filter when deleting by metadata.
-        # We delete all documents where the 'generatedQAId' metadata matches the ID.
-        questions_collection.delete(
-            where={"generatedQAId": generatedQAId}
-        )
-        print(f"[DEBUG] Deleted associated questions for ID: {generatedQAId} from questions_collection.")
-
-        # --- Delete Main Question Bank Metadata (mcq_collection) ---
-
-        # We delete the single document using its ID (which is the generatedQAId).
-        collection.delete(
-            ids=[generatedQAId]
-        )
-        print(f"[DEBUG] Deleted main metadata entry for ID: {generatedQAId} from mcq_collection.")
-
+        filt = models.Filter(must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))])
+        hits = client.scroll(collection_name=COLLECTION_QUESTIONS, limit=1000, scroll_filter=filt)
+        hits = _normalize_scroll_result(hits)
+        ids_to_delete = []
+        for h in hits:
+            # h may be dict or object; normalize id
+            if isinstance(h, dict):
+                pid = h.get("id") or h.get("point_id") or h.get("pointId")
+            else:
+                pid = getattr(h, "id", None) or getattr(h, "point_id", None)
+            if pid:
+                ids_to_delete.append(pid)
+        if ids_to_delete:
+            client.delete(collection_name=COLLECTION_QUESTIONS, points=ids_to_delete)
+        client.delete(collection_name=COLLECTION_MCQ, points=[generatedQAId])
         return True
-
     except Exception as e:
-        print(f"[ERROR] Failed to delete question bank '{generatedQAId}': {e}")
-        # Return False to trigger a 404 or 500 in the Flask route
+        print("delete_mcq_bank error:", e)
         return False
-
 
 def delete_test_session_by_id(testId):
-    """
-    Deletes a specific test session from the test_sessions_collection using its ID.
-
-    Args:
-        testId (str): The unique ID of the test session to delete.
-
-    Returns:
-        bool: True if the operation completed (whether an item was deleted or not),
-              False on a critical database error.
-    """
-
-        # Use the delete method, specifying the ID
-    test_sessions_collection.delete(ids=[testId])
-    return True
-
-
-
-
-def delete_submitted_test_by_id(testId):
-    """
-    Deletes a specific submitted test result from the submitted_tests_collection.
-    """
     try:
-        result = submitted_tests_collection.delete(
-            ids=[testId]
+        client.delete(
+            collection_name=COLLECTION_SUBMITTED,
+            points_selector=models.PointIdsList(
+                points=[testId]
+            )
         )
-
-        if result and result.get('ids'):
-            print(f"[DEBUG] Deleted submitted test result with ID: {testId}.")
-            return True
-        else:
-            print(f"[WARN] Submitted test ID '{testId}' not found for deletion.")
-            return False
-
-    except Exception as e:
-        print(f"[ERROR] Failed to delete submitted test result '{testId}': {e}")
-        return False
-
-
-
-def update_test_session(testId, updated_metadata):
-    """
-    Updates the metadata for a single test session by its testId.
-
-    Args:
-        testId (str): The ID of the test session to update.
-        updated_metadata (dict): The dictionary containing all fields (including unchanged ones).
-
-    Returns:
-        bool: True on success, False on failure.
-    """
-    try:
-        # Convert the 'questions' list back to a JSON string for ChromaDB storage
-        if 'questions' in updated_metadata and isinstance(updated_metadata['questions'], (list, dict)):
-            updated_metadata['questions'] = json.dumps(updated_metadata['questions'])
-
-        # Ensure the document field is present for the upsert call
-        document_text = updated_metadata.get("testTitle", "Updated Test Session")
-
-        # Perform the upsert (update in place)
-        test_sessions_collection.upsert(
-            ids=[testId],
-            documents=[f"Test session for user {updated_metadata.get('userId', 'N/A')}"],
-            metadatas=[updated_metadata]
-        )
-        print(f"[DEBUG] Successfully updated test session with ID: {testId}")
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to update test session: {e}")
+        print("delete_test_session_by_id error:", e)
         return False
 
-
-
-
-def update_question_bank_metadata(generatedQAId: str, title: str = None, description: str = None):
-    """
-    Updates the title and/or description of the main question bank metadata document.
-    """
-    update_result = {"success": False, "title_updated": False, "description_updated": False}
-
+def delete_submitted_test_by_id(testId):
     try:
-        # 1. Fetch the existing record to get ALL current metadata and documents
-        results = collection.get(ids=[generatedQAId], include=["metadatas", "documents", "embeddings"])
-
-        if not results or not results["ids"]:
-            print(f"[WARN] Question bank ID '{generatedQAId}' not found for metadata update.")
-            return update_result
-
-        existing_meta = results["metadatas"][0].copy()
-        document_text = results["documents"][0]
-        # Embeddings are needed for the upsert, even if they aren't changing
-        existing_embeddings = results["embeddings"][0]
-
-        # 2. Update the fields if new values are provided
-        update_required = False
-
-        if title is not None and existing_meta.get("title") != title:
-            existing_meta["title"] = title
-            update_required = True
-            update_result["title_updated"] = True
-
-        if description is not None and existing_meta.get("description") != description:
-            existing_meta["description"] = description
-            update_required = True
-            update_result["description_updated"] = True
-
-        if not update_required:
-            update_result["success"] = True
-            return update_result  # Nothing to update
-
-        # 3. If title or description changed, update the embedding (CRITICAL for search accuracy)
-        if update_result["title_updated"] or update_result["description_updated"]:
-            new_text_for_embedding = f"{existing_meta.get('title', '')} {existing_meta.get('description', '')}"
-            new_embeddings = embed(new_text_for_embedding)
-        else:
-            new_embeddings = existing_embeddings
-
-        # 4. Perform the upsert (update in place)
-        collection.upsert(
-            ids=[generatedQAId],
-            documents=[document_text],  # Re-use the existing document text (userIdClean)
-            embeddings=new_embeddings,
-            metadatas=[existing_meta]
+        client.delete(
+            collection_name=COLLECTION_SUBMITTED,
+            points_selector=models.PointIdsList(
+                points=[testId]
+            )
         )
-        print(f"[DEBUG] Updated metadata for Question Bank ID: {generatedQAId}")
-        update_result["success"] = True
-        return update_result
-
+        return True
     except Exception as e:
-        print(f"[ERROR] Failed to update question bank metadata for {generatedQAId}: {e}")
-        return update_result
+        print("delete_submitted_test_by_id error:", e)
+        return False
+
+def update_test_session(testId, updated_metadata):
+    try:
+        existing = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
+        if not existing:
+            return False
+        payload = _extract_payload(existing)
+        if 'questions' in updated_metadata and isinstance(updated_metadata['questions'], (list, dict)):
+            updated_metadata['questions'] = json.dumps(updated_metadata['questions'])
+        payload.update(updated_metadata)
+        vec = embed(payload.get("testTitle", f"test_session:{testId}"))[0]
+        p = models.PointStruct(id=testId, vector=vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_TEST_SESSIONS, points=[p])
+        return True
+    except Exception as e:
+        print("update_test_session error:", e)
+        return False
+
+def update_question_bank_metadata(generatedQAId, title=None, description=None):
+    result = {"success": False, "title_updated": False, "description_updated": False}
+    try:
+        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        if not bank:
+            return result
+        payload = _extract_payload(bank)
+        update_required = False
+        if title is not None and payload.get("title") != title:
+            payload["title"] = title
+            update_required = True
+            result["title_updated"] = True
+        if description is not None and payload.get("description") != description:
+            payload["description"] = description
+            update_required = True
+            result["description_updated"] = True
+        if not update_required:
+            result["success"] = True
+            return result
+        new_vec = embed(f"{payload.get('title','')} {payload.get('description','')}")[0]
+        p = models.PointStruct(id=generatedQAId, vector=new_vec, payload=payload)
+        client.upsert(collection_name=COLLECTION_MCQ, points=[p])
+        result["success"] = True
+        return result
+    except Exception as e:
+        print("update_question_bank_metadata error:", e)
+        return result
