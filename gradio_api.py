@@ -1,8 +1,4 @@
 
-
-# from gradio_client import Client
-# client = Client("heerjtdev/edugenius")
-#
 # # This will print a summary of all available API endpoints (functions).
 # client.view_api()
 
@@ -11,7 +7,7 @@ import os
 import json
 from typing import Dict, Any, Tuple
 from gradio_client import Client
-from drive_uploader import get_file_content_in_memory
+from drive_uploader import get_file_content_in_memory,load_env
 
 
 
@@ -20,6 +16,10 @@ from drive_uploader import get_file_content_in_memory
 # Note: gradio_client will typically raise a ValueError or similar on connection failure.
 
 def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
+    load_env()  # make sure env is loaded before using
+    hf_space = os.environ.get("HF_SPACE_E")
+    if not hf_space:
+        raise RuntimeError("HF_SPACE not found in .env")
     """
     Calls the heerjtdev/edugenius Hugging Face Space API to process a PDF.
 
@@ -39,7 +39,7 @@ def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
     # 2. Initialize the client with the Space's ID
     try:
         # Client initialization is non-blocking and fast
-        client = Client("heerjtdev/edugenius")
+        client = Client(hf_space)
     except Exception as e:
         # This handles issues like incorrect Space ID or network problems during setup
         raise ConnectionError(f"Could not initialize connection to Hugging Face Space: {e}")
@@ -87,6 +87,10 @@ def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
 
 
 def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
+    load_env()  # make sure env is loaded before using
+    hf_space = os.environ.get("HF_SPACE")
+    if not hf_space:
+        raise RuntimeError("HF_SPACE not found in .env")
     """
     Calls the heerjtdev/LayoutLM-pdfparser Hugging Face Space API to process a PDF.
 
@@ -116,7 +120,7 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
 
     print("Calling LayoutLM API...")
     try:
-        client = Client("heerjtdev/LayoutLM-pdfparser")
+        client = Client(hf_space)
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
