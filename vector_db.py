@@ -1,20 +1,19 @@
 
-# qdrant_mcq_db.py - converted from ChromaDB to Qdrant Cloud
-import os
+
 import uuid
-import json
+import json,os
 import random
 from collections import OrderedDict
 from datetime import datetime
-from typing import List, Dict, Any
-
+from typing import  Dict, Any
+from drive_uploader import load_env
 import numpy as np
 
 from qdrant_client import QdrantClient, models
-
+load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
-QDRANT_URL = "https://4c6c6f81-2667-44e1-bb76-cf28ea918153.us-west-2-0.aws.cloud.qdrant.io"  # change to your cluster URL
-QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.RcRl-Ohp1jpkz2LwfAr8ldRLjmt_9S7mjM15YDtaBKM"
+QDRANT_URL =os.environ.get("QDRANT_URL")  # change to your cluster URL
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
 VECTOR_DIM = 384
 DISTANCE = models.Distance.COSINE
 TIMEOUT = 60.0
@@ -28,40 +27,58 @@ client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 
 def ensure_collections():
     existing = [c.name for c in client.get_collections().collections]
+
     vector_params = models.VectorParams(size=VECTOR_DIM, distance=DISTANCE)
 
+    # ---- CREATE COLLECTIONS (new API) ----
     if COLLECTION_MCQ not in existing:
-        client.create_collection(collection_name=COLLECTION_MCQ, vectors=vector_params, default_payload_schema={
-            "generatedQAId": models.PayloadSchemaType.KEYWORD, "userId": models.PayloadSchemaType.KEYWORD
-        })
-    if COLLECTION_QUESTIONS not in existing:
-        client.create_collection(collection_name=COLLECTION_QUESTIONS, vectors=vector_params, default_payload_schema={
-            "generatedQAId": models.PayloadSchemaType.KEYWORD, "userId": models.PayloadSchemaType.KEYWORD, "questionId": models.PayloadSchemaType.KEYWORD
-        })
-    if COLLECTION_TEST_SESSIONS not in existing:
-        client.create_collection(collection_name=COLLECTION_TEST_SESSIONS, vectors=vector_params, default_payload_schema={
-            "userId": models.PayloadSchemaType.KEYWORD, "testId": models.PayloadSchemaType.KEYWORD
-        })
-    if COLLECTION_SUBMITTED not in existing:
-        client.create_collection(collection_name=COLLECTION_SUBMITTED, vectors=vector_params, default_payload_schema={
-            "userId": models.PayloadSchemaType.KEYWORD, "testId": models.PayloadSchemaType.KEYWORD
-        })
+        client.create_collection(
+            collection_name=COLLECTION_MCQ,
+            vectors_config=vector_params
+        )
 
+    if COLLECTION_QUESTIONS not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_QUESTIONS,
+            vectors_config=vector_params
+        )
+
+    if COLLECTION_TEST_SESSIONS not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_TEST_SESSIONS,
+            vectors_config=vector_params
+        )
+
+    if COLLECTION_SUBMITTED not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_SUBMITTED,
+            vectors_config=vector_params
+        )
+
+    # ---- ADD PAYLOAD INDEXES (same as before) ----
     def _safe_index(col, field):
         try:
-            client.create_payload_index(collection_name=col, field_name=field, field_schema=models.PayloadSchemaType.KEYWORD)
+            client.create_payload_index(
+                collection_name=col,
+                field_name=field,
+                field_schema=models.PayloadSchemaType.KEYWORD
+            )
         except Exception:
             pass
 
     _safe_index(COLLECTION_MCQ, "generatedQAId")
     _safe_index(COLLECTION_MCQ, "userId")
+
     _safe_index(COLLECTION_QUESTIONS, "generatedQAId")
     _safe_index(COLLECTION_QUESTIONS, "userId")
     _safe_index(COLLECTION_QUESTIONS, "questionId")
+
     _safe_index(COLLECTION_TEST_SESSIONS, "userId")
     _safe_index(COLLECTION_TEST_SESSIONS, "testId")
+
     _safe_index(COLLECTION_SUBMITTED, "userId")
     _safe_index(COLLECTION_SUBMITTED, "testId")
+
 
 ensure_collections()
 
