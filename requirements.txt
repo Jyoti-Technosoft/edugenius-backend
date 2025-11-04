@@ -1,4 +1,3 @@
-chromadb
 flask
 flask-cors
 gunicorn
