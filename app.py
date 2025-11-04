@@ -1,16 +1,14 @@
 import uuid
 from collections import Counter
 import pickle
-from typing import List, Dict, Any, Tuple
+from typing import Tuple
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import os
-import re
 import json
 from datetime import datetime
-import base64
 import random
-from gradio_api import call_edugenius_api, call_layoutlm_api
+from gradio_api import call_layoutlm_api
 from drive_uploader import upload_to_drive
 from io import BytesIO
 
@@ -23,15 +21,6 @@ MODEL OPTIONS
 
 ===========================================================
 """
-
-
-#from working_prototype_layout_safety import process_pdf_pipeline #[UNCOMMENT THIS FOR USING THE FINETUNED LAYOUTLMv3+CRF MODEL]
-#from working_prototype_layout_LSTM import process_pdf_pipeline  # Bi-LSTM_CRF MODEL
-#from BERT_CRF_INFERENCE import process_pdf_pipeline  # BERT_CRF_INFERENCE MODEL
-
-
-#pytesseract.pytesseract.tesseract_cmd = r"./usr/bin/tesseract"
-
 app = Flask(__name__)
 CORS(app)
 
@@ -63,9 +52,6 @@ def format_mcq(mcq):
 # ===================================================
 # uncomment the text below to use gemini pipeline instead of the pre-trained model
 # ===================================================
-
-#pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'
-
 
 class Vocab:
     """Vocabulary class for serialization and lookup."""
@@ -135,63 +121,71 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route("/create_question_bank", methods=["POST"])
 def upload_pdf():
-    VECTORDB_PATH = "./chromadb_data"
+    print("\n[START] /create_question_bank request received")
 
-    # Step 0: Check if ChromaDB storage exists
-    if not os.path.exists(VECTORDB_PATH):
-        print(f"[ERROR] VectorDB storage not found at {VECTORDB_PATH}. Cannot store MCQs.")
-    else:
-        print(f"[INFO] VectorDB path verified: {VECTORDB_PATH}")
-    print("Starting and getting all the inputs")
+    # 1. Validate inputs
     user_id = request.form.get("userId")
     title = request.form.get("title")
     description = request.form.get("description")
     pdf_file = request.files.get("pdf")
 
+    print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
     if not pdf_file:
-        return jsonify({"error": "I have not received/don’t have access to the PDF file"}), 400
+        print("[ERROR] Missing PDF in request")
+        return jsonify({"error": "PDF file not provided"}), 400
 
     if not all([user_id, title, description]):
+        print("[ERROR] Missing required fields (userId/title/description)")
         return jsonify({"error": "userId, title, description are required"}), 400
 
-    print("go Upload PDF directly to Google Drive")
+    # 2. Move PDF in memory → temp → upload to Drive
+    print("[STEP] Reading PDF into memory")
     original_name = secure_filename(pdf_file.filename)
-    in_memory_file = BytesIO(pdf_file.read())  # keep in memory, not disk
-    print("Upload PDF directly to Google Drive successfully")
-    # Save the in-memory file to a temporary binary file to upload
+    in_memory_file = BytesIO(pdf_file.read())
+
     temp_name = f"/tmp/{original_name}"
     with open(temp_name, "wb") as temp:
         temp.write(in_memory_file.getvalue())
+    print(f"[INFO] Temporary file created → {temp_name}")
 
+    print("[STEP] Uploading PDF to Google Drive...")
     file_id = upload_to_drive(temp_name)
+    print(f"[SUCCESS] File uploaded. Drive File ID: {file_id}")
+
     file_url = f"https://drive.google.com/uc?id={file_id}"
 
-    # Clean memory and temp
+    # Clean temp
     try:
         os.remove(temp_name)
     except:
         pass
+    print("[CLEANUP] Temp file removed")
 
+    # 3. Call LayoutLM API
+    print("[STEP] Calling LayoutLM API for MCQ extraction...")
+    final_data = call_layoutlm_api(file_id)
+    print(f"[SUCCESS] LayoutLM returned {len(final_data)} MCQs")
+
+    # 4. Add index to MCQs
+    print("[STEP] Formatting MCQs with indexes")
+    indexed_mcqs = [
+        {**mcq, "documentIndex": i}
+        for i, mcq in enumerate(final_data)
+    ]
+
+    # 5. Store in vector DB
+    print("[STEP] Storing Question Bank in vector database...")
     createdAtTimestamp = datetime.now().isoformat()
-
-    print("Extract and format Question Bank")
-    final_data = call_layoutlm_api(file_id)  # run API using Drive URL
-
-    print("Storing Question Bank")
-    indexed_mcqs = []
-    for i, mcq in enumerate(final_data):
-        mcq['documentIndex'] = i
-        indexed_mcqs.append(mcq)
-    print("genrated mcqs successfully")
     stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
+    print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
 
+    print("[END] Request complete\n")
     return Response(
         json.dumps({
             "generatedQAId": stored_id,
             "userId": user_id,
             "fileName": original_name,
             "createdAt": createdAtTimestamp,
-
         }, ensure_ascii=False),
         mimetype="application/json"
     )
