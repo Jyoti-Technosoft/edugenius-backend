@@ -14,7 +14,7 @@ from qdrant_client import QdrantClient, models
 
 # Configuration - set these in your environment for Qdrant Cloud
 QDRANT_URL = "https://4c6c6f81-2667-44e1-bb76-cf28ea918153.us-west-2-0.aws.cloud.qdrant.io"  # change to your cluster URL
-QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.DDJW3ueFJwTFISJNYc5PysCBbpQTcacLi0FHW-1YzUw"
+QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIn0.RcRl-Ohp1jpkz2LwfAr8ldRLjmt_9S7mjM15YDtaBKM"
 VECTOR_DIM = 384
 DISTANCE = models.Distance.COSINE
 TIMEOUT = 60.0
