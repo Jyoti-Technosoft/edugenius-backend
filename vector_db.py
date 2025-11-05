@@ -136,6 +136,7 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
             ("image", mcq.get("image")),
+            
             ("options", options_json),
             ("answer", mcq.get("answer", "")),
             ("documentIndex", i)
@@ -338,14 +339,35 @@ def _ensure_json_field(payload, key):
 
 # ---------- Functions (rewritten) ----------
 
+# def fetch_test_by_testId(testId):
+#     try:
+#         p = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
+#         payload = _extract_payload(p)
+#         payload = _ensure_json_field(payload, "questions")
+#         # ensure testId present
+#         payload["testId"] = payload.get("testId") or _extract_id(p)
+#         return payload
+#     except Exception as e:
+#         print("fetch_test_by_testId error:", e)
+#         return None
+
 def fetch_test_by_testId(testId):
     try:
-        p = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
+        result = client.retrieve(
+            collection_name=COLLECTION_TEST_SESSIONS,
+            ids=[testId],  # Must be a list
+            with_payload=True
+        )
+
+        if not result:
+            return None
+
+        p = result[0]  # Retrieve the first (and only) result
         payload = _extract_payload(p)
         payload = _ensure_json_field(payload, "questions")
-        # ensure testId present
         payload["testId"] = payload.get("testId") or _extract_id(p)
         return payload
+
     except Exception as e:
         print("fetch_test_by_testId error:", e)
         return None
