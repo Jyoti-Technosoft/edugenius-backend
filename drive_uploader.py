@@ -123,11 +123,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # -----------------------------------------------------------
 # .ENV LOADER WITH DEBUG LOGGING
 # -----------------------------------------------------------
-def log_env_debug(message):
-    """Write debug info into .env_debug.log file"""
-    with open(".env_debug.log", "a", encoding="utf-8") as f:
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        f.write(f"[{ts}] {message}\n")
+
 
 
 def load_env():
@@ -137,9 +133,9 @@ def load_env():
                 if "=" in line:
                     k, v = line.strip().split("=", 1)
                     os.environ[k] = v
-        log_env_debug("✅ .env file loaded successfully.")
+        print("✅ .env file loaded successfully.")
     else:
-        log_env_debug("⚠️ .env file not found.")
+        print("⚠️ .env file not found.")
 
 
 load_env()
@@ -152,19 +148,19 @@ def decode_json_env_var(key):
     """Decode base64 JSON data from .env"""
     data = os.environ.get(key)
     if not data:
-        log_env_debug(f"⚠️ Missing env variable: {key}")
+        print(f"⚠️ Missing env variable: {key}")
         return None
 
     try:
         decoded = base64.b64decode(data).decode()
-        log_env_debug(f"✅ Successfully base64-decoded {key}. Length={len(decoded)} chars")
+        print(f"✅ Successfully base64-decoded {key}. Length={len(decoded)} chars")
 
         parsed = json.loads(decoded)
-        log_env_debug(f"✅ Successfully parsed JSON for {key}. Keys={list(parsed.keys())}")
+        print(f"✅ Successfully parsed JSON for {key}. Keys={list(parsed.keys())}")
 
         return parsed
     except Exception as e:
-        log_env_debug(f"❌ Failed to decode/parse {key}: {str(e)}")
+        print(f"❌ Failed to decode/parse {key}: {str(e)}")
         return None
 
 
@@ -186,11 +182,11 @@ def save_token_to_env(creds):
         with open(".env", "w") as f:
             f.writelines(lines)
 
-        log_env_debug("✅ Token refreshed and saved to .env successfully.")
+        print("✅ Token refreshed and saved to .env successfully.")
         print("✅ Token updated in .env")
 
     except Exception as e:
-        log_env_debug(f"❌ Failed to save token to .env: {str(e)}")
+        print(f"❌ Failed to save token to .env: {str(e)}")
 
 
 # -----------------------------------------------------------
@@ -202,15 +198,15 @@ def get_drive_service():
     client_secret = decode_json_env_var("CLIENT_SECRET")
     token_data = decode_json_env_var("TOKEN")
 
-    log_env_debug(f"Client secret loaded: {bool(client_secret)}")
-    log_env_debug(f"Token data loaded: {bool(token_data)}")
+    print(f"Client secret loaded: {bool(client_secret)}")
+    print(f"Token data loaded: {bool(token_data)}")
 
     if token_data:
         try:
             creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-            log_env_debug("✅ Loaded credentials from TOKEN env.")
+            print("✅ Loaded credentials from TOKEN env.")
         except Exception as e:
-            log_env_debug(f"❌ Error loading credentials from TOKEN: {str(e)}")
+            print(f"❌ Error loading credentials from TOKEN: {str(e)}")
 
     # Refresh or new login
     if creds and creds.expired and creds.refresh_token:
@@ -219,7 +215,7 @@ def get_drive_service():
             creds.refresh(Request())
             save_token_to_env(creds)
         except Exception as e:
-            log_env_debug(f"❌ Failed to refresh token: {str(e)}")
+            print(f"❌ Failed to refresh token: {str(e)}")
 
     if not creds or not creds.valid:
         print("⚠️ No valid token found, starting console login...")
@@ -228,10 +224,10 @@ def get_drive_service():
             creds = flow.run_console()
             save_token_to_env(creds)
         except Exception as e:
-            log_env_debug(f"❌ Failed during InstalledAppFlow: {str(e)}")
+            print(f"❌ Failed during InstalledAppFlow: {str(e)}")
             raise
 
-    log_env_debug("✅ Google Drive service initialized successfully.")
+    print("✅ Google Drive service initialized successfully.")
     return build("drive", "v3", credentials=creds)
 
 
@@ -245,11 +241,11 @@ def upload_to_drive(file_path):
         media = MediaFileUpload(file_path, resumable=True)
         file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         file_id = file.get('id')
-        log_env_debug(f"✅ Uploaded {file_path} to Drive (File ID: {file_id})")
+        print(f"✅ Uploaded {file_path} to Drive (File ID: {file_id})")
         print(f"Uploaded {file_path} → Drive (File ID: {file_id})")
         return file_id
     except Exception as e:
-        log_env_debug(f"❌ Upload failed: {str(e)}")
+        print(f"❌ Upload failed: {str(e)}")
         raise
 
 
@@ -270,9 +266,9 @@ def get_file_content_in_memory(file_id):
                 print(f"Download progress: {int(status.progress() * 100)}%")
 
         file_stream.seek(0)
-        log_env_debug(f"✅ File {file_id} downloaded into memory successfully.")
+        print(f"✅ File {file_id} downloaded into memory successfully.")
         print("File loaded into memory successfully.")
         return file_stream
     except Exception as e:
-        log_env_debug(f"❌ File download failed for {file_id}: {str(e)}")
+        print(f"❌ File download failed for {file_id}: {str(e)}")
         raise
