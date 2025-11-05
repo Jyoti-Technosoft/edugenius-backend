@@ -111,7 +111,7 @@
 #     return file_stream
 
 
-from __future__ import print_function
+# from __future__ import print_function
 import os, io, json, base64, datetime
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -195,17 +195,53 @@ def get_drive_service():
     creds = None
 
     print("🔍 Starting Google Drive service initialization...")
-    print("🔍 Decoding CLIENT_SECRET from environment...")
+
+    # -----------------------------------------------------------
+    # STEP 1: Print raw .env values BEFORE decoding
+    # -----------------------------------------------------------
+    raw_client_secret = os.environ.get("CLIENT_SECRET")
+    raw_token = os.environ.get("TOKEN")
+
+    print("\n🧾 Raw .env values before decoding:")
+    print(f"   • CLIENT_SECRET (base64) length: {len(raw_client_secret) if raw_client_secret else 'MISSING'}")
+    print(f"   • TOKEN (base64) length: {len(raw_token) if raw_token else 'MISSING'}")
+
+    if raw_client_secret:
+        print(f"   CLIENT_SECRET (preview): {raw_client_secret[:60]}...")
+    if raw_token:
+        print(f"   TOKEN (preview): {raw_token[:60]}...")
+
+    # -----------------------------------------------------------
+    # STEP 2: Decode CLIENT_SECRET
+    # -----------------------------------------------------------
+    print("\n🔍 Decoding CLIENT_SECRET from environment...")
     client_secret = decode_json_env_var("CLIENT_SECRET")
-    print(f"📦 CLIENT_SECRET decode completed. Result: {'Loaded' if client_secret else 'Failed'}")
 
-    print("🔍 Decoding TOKEN from environment...")
+    if client_secret:
+        print(f"📦 CLIENT_SECRET decode completed successfully. Keys: {list(client_secret.keys())}")
+        print("🧩 CLIENT_SECRET decoded JSON:")
+        print(json.dumps(client_secret, indent=4))
+    else:
+        print("❌ CLIENT_SECRET decode failed or missing.")
+
+    # -----------------------------------------------------------
+    # STEP 3: Decode TOKEN
+    # -----------------------------------------------------------
+    print("\n🔍 Decoding TOKEN from environment...")
     token_data = decode_json_env_var("TOKEN")
-    print(f"📦 TOKEN decode completed. Result: {'Loaded' if token_data else 'Failed'}")
 
-    print(f"Client secret loaded: {bool(client_secret)}")
+    if token_data:
+        print(f"📦 TOKEN decode completed successfully. Keys: {list(token_data.keys())}")
+        print("🧩 TOKEN decoded JSON:")
+        print(json.dumps(token_data, indent=4))
+    else:
+        print("❌ TOKEN decode failed or missing.")
+
+    # -----------------------------------------------------------
+    # STEP 4: Load credentials
+    # -----------------------------------------------------------
+    print(f"\nClient secret loaded: {bool(client_secret)}")
     print(f"Token data loaded: {bool(token_data)}")
-
 
     if token_data:
         try:
@@ -214,7 +250,9 @@ def get_drive_service():
         except Exception as e:
             print(f"❌ Error loading credentials from TOKEN: {str(e)}")
 
-    # Refresh or new login
+    # -----------------------------------------------------------
+    # STEP 5: Refresh or start login if needed
+    # -----------------------------------------------------------
     if creds and creds.expired and creds.refresh_token:
         print("🔁 Refreshing expired token...")
         try:
@@ -233,10 +271,11 @@ def get_drive_service():
             print(f"❌ Failed during InstalledAppFlow: {str(e)}")
             raise
 
-    print("✅ Google Drive service initialized successfully.")
+    # -----------------------------------------------------------
+    # STEP 6: Initialize Drive service
+    # -----------------------------------------------------------
+    print("\n✅ Google Drive service initialized successfully.")
     return build("drive", "v3", credentials=creds)
-
-
 # -----------------------------------------------------------
 # FILE UPLOAD
 # -----------------------------------------------------------
