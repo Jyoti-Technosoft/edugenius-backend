@@ -1,117 +1,3 @@
-# from __future__ import print_function
-# import os, io, json, base64
-# from google.auth.transport.requests import Request
-# from google.oauth2.credentials import Credentials
-# from google_auth_oauthlib.flow import InstalledAppFlow
-# from googleapiclient.discovery import build
-# from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-
-
-# # -----------------------------------------------------------
-# # .ENV LOADER
-# # -----------------------------------------------------------
-# def load_env():
-#     if os.path.exists(".env"):
-#         with open(".env") as f:
-#             for line in f:
-#                 if "=" in line:
-#                     k, v = line.strip().split("=", 1)
-#                     os.environ[k] = v
-
-# load_env()
-
-# SCOPES = [os.environ.get("SCOPES")]
-# FOLDER_ID = os.environ.get("FOLDER_ID")
-
-
-# def decode_json_env_var(key):
-#     data = os.environ.get(key)
-#     if not data:
-#         return None
-#     return json.loads(base64.b64decode(data).decode())
-
-
-# def save_token_to_env(creds):
-#     token_json = creds.to_json()
-#     encoded = base64.b64encode(token_json.encode()).decode()
-
-#     lines = []
-#     if os.path.exists(".env"):
-#         with open(".env") as f:
-#             for line in f:
-#                 if not line.startswith("TOKEN="):
-#                     lines.append(line)
-
-#     lines.append(f"TOKEN={encoded}\n")
-
-#     with open(".env", "w") as f:
-#         f.writelines(lines)
-
-#     print("✅ Token updated in .env")
-
-
-# # -----------------------------------------------------------
-# # GOOGLE AUTH USING BASE64 JSON
-# # -----------------------------------------------------------
-# def get_drive_service():
-#     creds = None
-
-#     client_secret = decode_json_env_var("CLIENT_SECRET")
-#     token_data = decode_json_env_var("TOKEN")
-
-#     # Load token from .env
-#     if token_data:
-#         creds = Credentials.from_authorized_user_info(token_data, SCOPES)
-
-#     # Refresh OR login first time
-#     if creds and creds.expired and creds.refresh_token:
-#         print("🔁 Refreshing expired token...")
-#         creds.refresh(Request())
-#         save_token_to_env(creds)
-
-#     if not creds or not creds.valid:
-#         print("⚠️ No valid token found, starting console login...")
-#         flow = InstalledAppFlow.from_client_config(client_secret, SCOPES)
-#         creds = flow.run_console()
-#         save_token_to_env(creds)
-
-#     return build("drive", "v3", credentials=creds)
-
-
-# # -----------------------------------------------------------
-# # FILE UPLOAD
-# # -----------------------------------------------------------
-# def upload_to_drive(file_path):
-#     service = get_drive_service()
-#     file_metadata = {'name': os.path.basename(file_path), 'parents': [FOLDER_ID]}
-#     media = MediaFileUpload(file_path, resumable=True)
-#     file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-#     file_id = file.get('id')
-#     print(f"Uploaded {file_path} → Drive (File ID: {file_id})")
-#     return file_id
-
-
-# # -----------------------------------------------------------
-# # IN-MEMORY DOWNLOAD
-# # -----------------------------------------------------------
-# def get_file_content_in_memory(file_id):
-#     service = get_drive_service()
-#     request = service.files().get_media(fileId=file_id)
-#     file_stream = io.BytesIO()
-#     downloader = MediaIoBaseDownload(file_stream, request)
-
-#     done = False
-#     while not done:
-#         status, done = downloader.next_chunk()
-#         if status:
-#             print(f"Download progress: {int(status.progress() * 100)}%")
-
-#     file_stream.seek(0)
-#     print("File loaded into memory successfully.")
-#     return file_stream
-
-
-# from __future__ import print_function
 import os, io, json, base64, datetime
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -132,7 +18,6 @@ def load_env():
                 if "=" in line:
                     k, v = line.strip().split("=", 1)
                     os.environ[k] = v
-        print("✅ .env file loaded successfully.")
     else:
         print("⚠️ .env file not found.")
 
@@ -147,15 +32,11 @@ def decode_json_env_var(key):
     """Decode base64 JSON data from .env"""
     data = os.environ.get(key)
     if not data:
-        print(f"⚠️ Missing env variable: {key}")
         return None
 
     try:
         decoded = base64.b64decode(data).decode()
-        print(f"✅ Successfully base64-decoded {key}. Length={len(decoded)} chars")
-
         parsed = json.loads(decoded)
-        print(f"✅ Successfully parsed JSON for {key}. Keys={list(parsed.keys())}")
 
         return parsed
     except Exception as e:
@@ -181,12 +62,8 @@ def save_token_to_env(creds):
         with open(".env", "w") as f:
             f.writelines(lines)
 
-        print("✅ Token refreshed and saved to .env successfully.")
-        print("✅ Token updated in .env")
-
     except Exception as e:
         print(f"❌ Failed to save token to .env: {str(e)}")
-
 
 # -----------------------------------------------------------
 # GOOGLE AUTH USING BASE64 JSON
@@ -194,17 +71,13 @@ def save_token_to_env(creds):
 def get_drive_service():
     creds = None
 
-    print("🔍 Starting Google Drive service initialization...")
-
     # -----------------------------------------------------------
     # STEP 1: Print raw .env values BEFORE decoding
     # -----------------------------------------------------------
     raw_client_secret = os.environ.get("CLIENT_SECRET")
     raw_token = os.environ.get("TOKEN")
 
-    print("\n🧾 Raw .env values before decoding:")
-    print(f"   • CLIENT_SECRET (base64) length: {len(raw_client_secret) if raw_client_secret else 'MISSING'}")
-    print(f"   • TOKEN (base64) length: {len(raw_token) if raw_token else 'MISSING'}")
+
 
     if raw_client_secret:
         print(f"   CLIENT_SECRET (preview): {raw_client_secret[:60]}...")
@@ -214,34 +87,17 @@ def get_drive_service():
     # -----------------------------------------------------------
     # STEP 2: Decode CLIENT_SECRET
     # -----------------------------------------------------------
-    print("\n🔍 Decoding CLIENT_SECRET from environment...")
-    client_secret = decode_json_env_var("CLIENT_SECRET")
 
-    if client_secret:
-        print(f"📦 CLIENT_SECRET decode completed successfully. Keys: {list(client_secret.keys())}")
-        print("🧩 CLIENT_SECRET decoded JSON:")
-        print(json.dumps(client_secret, indent=4))
-    else:
-        print("❌ CLIENT_SECRET decode failed or missing.")
+    client_secret = decode_json_env_var("CLIENT_SECRET")
 
     # -----------------------------------------------------------
     # STEP 3: Decode TOKEN
     # -----------------------------------------------------------
-    print("\n🔍 Decoding TOKEN from environment...")
     token_data = decode_json_env_var("TOKEN")
-
-    if token_data:
-        print(f"📦 TOKEN decode completed successfully. Keys: {list(token_data.keys())}")
-        print("🧩 TOKEN decoded JSON:")
-        print(json.dumps(token_data, indent=4))
-    else:
-        print("❌ TOKEN decode failed or missing.")
 
     # -----------------------------------------------------------
     # STEP 4: Load credentials
     # -----------------------------------------------------------
-    print(f"\nClient secret loaded: {bool(client_secret)}")
-    print(f"Token data loaded: {bool(token_data)}")
 
     if token_data:
         try:
@@ -286,7 +142,6 @@ def upload_to_drive(file_path):
         media = MediaFileUpload(file_path, resumable=True)
         file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         file_id = file.get('id')
-        print(f"✅ Uploaded {file_path} to Drive (File ID: {file_id})")
         print(f"Uploaded {file_path} → Drive (File ID: {file_id})")
         return file_id
     except Exception as e:
@@ -317,3 +172,14 @@ def get_file_content_in_memory(file_id):
     except Exception as e:
         print(f"❌ File download failed for {file_id}: {str(e)}")
         raise
+
+
+def delete_from_drive(file_id):
+    try:
+        service = get_drive_service()
+        service.files().delete(fileId=file_id).execute()
+        print(f"🗑️ Deleted file from Drive (File ID: {file_id})")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to delete file {file_id} from Drive: {str(e)}")
+        return False
