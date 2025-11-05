@@ -21,7 +21,6 @@ def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
     """
-    Calls the heerjtdev/edugenius Hugging Face Space API to process a PDF.
 
     Args:
         pdf_path: The local file path to the PDF document.
@@ -92,7 +91,6 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
     """
-    Calls the heerjtdev/LayoutLM-pdfparser Hugging Face Space API to process a PDF.
 
     Args:
         pdf_path: The local file path to the PDF document.
