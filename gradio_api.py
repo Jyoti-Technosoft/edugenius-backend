@@ -124,10 +124,15 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
-    structured_input = {
-         "path": temp_path,
-         "meta": {"_type": "gradio.FileData"}
-        }
+    # structured_input = {
+    #      "path": temp_path,
+    #      "meta": {"_type": "gradio.FileData"}
+    #     }
+    
+    structured_input_list = [{
+        "path": temp_path,
+        "meta": {"_type": "gradio.FileData"}
+    }]
 
     try:
         response = client.predict(structured_input, api_name="/predict")
