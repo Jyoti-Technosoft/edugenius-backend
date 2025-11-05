@@ -9,18 +9,9 @@ import json
 from datetime import datetime
 import random
 from gradio_api import call_layoutlm_api
-from drive_uploader import upload_to_drive
+from drive_uploader import upload_to_drive,delete_from_drive
 from io import BytesIO
 
-"""
-===========================================================
-
-
-MODEL OPTIONS
-
-
-===========================================================
-"""
 app = Flask(__name__)
 CORS(app)
 
@@ -166,6 +157,10 @@ def upload_pdf():
     final_data = call_layoutlm_api(file_id)
     print(f"[SUCCESS] LayoutLM returned {len(final_data)} MCQs")
 
+    # ✅ Delete file from Drive after successful extraction
+    print("[CLEANUP] Deleting uploaded file from Google Drive...")
+    delete_from_drive(file_id)
+
     # 4. Add index to MCQs
     print("[STEP] Formatting MCQs with indexes")
     indexed_mcqs = [
@@ -189,7 +184,6 @@ def upload_pdf():
         }, ensure_ascii=False),
         mimetype="application/json"
     )
-
 
 
 
