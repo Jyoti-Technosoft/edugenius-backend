@@ -125,7 +125,6 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # -----------------------------------------------------------
 
 
-
 def load_env():
     if os.path.exists(".env"):
         with open(".env") as f:
@@ -139,6 +138,12 @@ def load_env():
 
 
 load_env()
+
+
+decoded = base64.b64decode(os.environ.get("CLIENT_SECRET")).decode()
+print(json.dumps(json.loads(decoded), indent=2))
+decoded = base64.b64decode(os.environ.get("TOKEN")).decode()
+print(json.dumps(json.loads(decoded), indent=2))
 
 SCOPES = [os.environ.get("SCOPES")]
 FOLDER_ID = os.environ.get("FOLDER_ID")
