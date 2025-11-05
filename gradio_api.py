@@ -135,7 +135,7 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
     }]
 
     try:
-        response = client.predict(structured_input, api_name="/predict")
+        response = client.predict(structured_input_list, api_name="/predict")
     except Exception as e:
         raise ValueError(f"LayoutLM API call failed: {e}")
 
