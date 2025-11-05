@@ -340,18 +340,6 @@ def _ensure_json_field(payload, key):
 
 # ---------- Functions (rewritten) ----------
 
-# def fetch_test_by_testId(testId):
-#     try:
-#         p = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
-#         payload = _extract_payload(p)
-#         payload = _ensure_json_field(payload, "questions")
-#         # ensure testId present
-#         payload["testId"] = payload.get("testId") or _extract_id(p)
-#         return payload
-#     except Exception as e:
-#         print("fetch_test_by_testId error:", e)
-#         return None
-
 def fetch_test_by_testId(testId):
     try:
         result = client.retrieve(
@@ -372,6 +360,7 @@ def fetch_test_by_testId(testId):
     except Exception as e:
         print("fetch_test_by_testId error:", e)
         return None
+
 
 def test_sessions_by_userId(userId):
     try:
@@ -456,7 +445,7 @@ def delete_single_question(questionId):
 
 def update_single_question(questionId, updated_data):
     try:
-        existing = client.get_point(collection_name=COLLECTION_QUESTIONS, point_id=questionId, with_payload=True)
+        existing = client.retrieve(collection_name=COLLECTION_QUESTIONS, point_id=questionId, with_payload=True)
         if not existing:
             return False
         existing_payload = _extract_payload(existing)
@@ -481,7 +470,7 @@ def update_single_question(questionId, updated_data):
 
 def add_single_question(generatedQAId, question_data):
     try:
-        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        bank = client.retrieve(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
         if not bank:
             print(f"Question bank {generatedQAId} not found")
             return False
@@ -555,7 +544,7 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
 
 def delete_mcq_bank(generatedQAId):
     try:
-        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        bank = client.retrieve(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
         if not bank:
             print("bank not found")
             return False
@@ -607,7 +596,7 @@ def delete_submitted_test_by_id(testId):
 
 def update_test_session(testId, updated_metadata):
     try:
-        existing = client.get_point(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
+        existing = client.retrieve(collection_name=COLLECTION_TEST_SESSIONS, point_id=testId, with_payload=True)
         if not existing:
             return False
         payload = _extract_payload(existing)
