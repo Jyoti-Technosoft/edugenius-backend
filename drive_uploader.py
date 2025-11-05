@@ -139,12 +139,6 @@ def load_env():
 
 load_env()
 
-
-decoded = base64.b64decode(os.environ.get("CLIENT_SECRET")).decode()
-print(json.dumps(json.loads(decoded), indent=2))
-decoded = base64.b64decode(os.environ.get("TOKEN")).decode()
-print(json.dumps(json.loads(decoded), indent=2))
-
 SCOPES = [os.environ.get("SCOPES")]
 FOLDER_ID = os.environ.get("FOLDER_ID")
 
@@ -200,11 +194,18 @@ def save_token_to_env(creds):
 def get_drive_service():
     creds = None
 
+    print("🔍 Starting Google Drive service initialization...")
+    print("🔍 Decoding CLIENT_SECRET from environment...")
     client_secret = decode_json_env_var("CLIENT_SECRET")
+    print(f"📦 CLIENT_SECRET decode completed. Result: {'Loaded' if client_secret else 'Failed'}")
+
+    print("🔍 Decoding TOKEN from environment...")
     token_data = decode_json_env_var("TOKEN")
+    print(f"📦 TOKEN decode completed. Result: {'Loaded' if token_data else 'Failed'}")
 
     print(f"Client secret loaded: {bool(client_secret)}")
     print(f"Token data loaded: {bool(token_data)}")
+
 
     if token_data:
         try:
