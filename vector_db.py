@@ -136,7 +136,7 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
             ("image", mcq.get("image")),
-            
+            ("passage", mcq.get("passage") or ""),
             ("options", options_json),
             ("answer", mcq.get("answer", "")),
             ("documentIndex", i)
@@ -205,6 +205,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
                 ("question", payload.get("question")),
                 ("options", payload.get("options")),
                 ("answer", payload.get("answer")),
+                ("passage", payload.get("passage") or ""),
                 ("noise", payload.get("noise")),
                 ("image", payload.get("image")),
                 ("documentIndex", payload.get("documentIndex")),
@@ -535,6 +536,7 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
                 ("question", mcq.get("question") or ""),
                 ("noise", mcq.get("noise") or None),
                 ("image", mcq.get("image") or None),
+                ("passage", mcq.get("passage") or ""),
                 ("options", options_data),
                 ("answer", mcq.get("answer") or ""),
                 ("documentIndex", mcq.get("documentIndex"))
