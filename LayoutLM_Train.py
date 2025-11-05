@@ -1,29 +1,33 @@
 #Not Required File
+
 import json
 import argparse
 import os
 import random
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, random_split
+# Using LayoutLMv3TokenizerFast, LayoutLMv3Model
 from transformers import LayoutLMv3TokenizerFast, LayoutLMv3Model
+from transformers.utils import cached_file
+from safetensors.torch import load_file
 from TorchCRF import CRF
 from torch.optim import AdamW
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support
-import fitz  # PyMuPDF
-import pytesseract
-from PIL import Image
-from pdf2image import convert_from_path
 
 # --- Configuration for Augmentation ---
-MAX_BBOX_DIMENSION = 999
+MAX_BBOX_DIMENSION = 1000  # Corrected to 1000 to match LayoutLMv3 requirement
 MAX_SHIFT = 30
 AUGMENTATION_FACTOR = 1
 
-
 # -------------------------------------
+
+# --- Hugging Face Model ID ---
+HF_MODEL_ID = "heerjtdev/edugenius"
+
+
+# -----------------------------
 
 
 # -------------------------
@@ -34,10 +38,37 @@ def preprocess_labelstudio(input_path, output_path):
         data = json.load(f)
 
     processed = []
+    total_items = len(data)  # Added for potential verbose logging
+    print(f"🔄 Starting preprocessing of {total_items} documents My name is Aastik!! BOOBS...")
+
     for item in data:
         words = item["data"]["original_words"]
         bboxes = item["data"]["original_bboxes"]
         labels = ["O"] * len(words)
+
+        # --- NEW: Bounding Box Normalization/Clamping ---
+        # Defensively ensures all coordinates are within the [0, 1000] range
+        # required by LayoutLMv3's spatial position embeddings.
+        clamped_bboxes = []
+        for bbox in bboxes:
+            # Clamp coordinates to [0, 1000]
+            x_min, y_min, x_max, y_max = bbox
+
+            new_x_min = max(0, min(x_min, 1000))
+            new_y_min = max(0, min(y_min, 1000))
+            new_x_max = max(0, min(x_max, 1000))
+            new_y_max = max(0, min(y_max, 1000))
+
+            # Safety check: ensure min <= max (this should rarely trigger
+            # if the original bboxes were valid, but is good practice)
+            if new_x_min > new_x_max: new_x_min = new_x_max
+            if new_y_min > new_y_max: new_y_min = new_y_max
+
+            clamped_bboxes.append([new_x_min, new_y_min, new_x_max, new_y_max])
+
+        # Use the clamped bboxes for the rest of the pipeline
+        final_bboxes = clamped_bboxes
+        # ------------------------------------------------
 
         if "annotations" in item:
             for ann in item["annotations"]:
@@ -56,7 +87,7 @@ def preprocess_labelstudio(input_path, output_path):
                                     labels[i + j] = f"I-{tag}"
                                 break  # Move to next annotation if a match is found
 
-        processed.append({"tokens": words, "labels": labels, "bboxes": bboxes})
+        processed.append({"tokens": words, "labels": labels, "bboxes": final_bboxes})
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(processed, f, indent=2, ensure_ascii=False)
@@ -81,7 +112,7 @@ def translate_bbox(bbox, shift_x, shift_y):
     new_x_max = x_max + shift_x
     new_y_max = y_max + shift_y
 
-    # Clamp the new coordinates
+    # Clamp the new coordinates (MAX_BBOX_DIMENSION is 1000)
     new_x_min = max(0, min(new_x_min, MAX_BBOX_DIMENSION))
     new_y_min = max(0, min(new_y_min, MAX_BBOX_DIMENSION))
     new_x_max = max(0, min(new_x_max, MAX_BBOX_DIMENSION))
@@ -125,6 +156,8 @@ def augment_and_save_dataset(input_json_path, output_json_path):
     augmented_data = []
     original_count = len(training_data)
 
+    print(f"🔄 Starting augmentation (Factor: {AUGMENTATION_FACTOR}, {original_count} documents)...")
+
     for i, original_sample in enumerate(training_data):
         # 1. Add the original sample
         augmented_data.append(original_sample)
@@ -148,7 +181,7 @@ def augment_and_save_dataset(input_json_path, output_json_path):
 
 
 # -------------------------
-# Step 2: Dataset Class (Unchanged)
+# Step 2: Dataset Class
 # -------------------------
 class LayoutDataset(Dataset):
     def __init__(self, json_path, tokenizer, label2id, max_len=512):
@@ -192,12 +225,50 @@ class LayoutDataset(Dataset):
 
 
 # -------------------------
-# Step 3: Model Architecture 
+# Step 3: Model Architecture (PATCHED TO LOAD WEIGHTS CORRECTLY)
 # -------------------------
 class LayoutLMv3CRF(nn.Module):
-    def __init__(self, model_name, num_labels):
+    def __init__(self, model_name, num_labels, device):
         super().__init__()
-        self.layoutlm = LayoutLMv3Model.from_pretrained(model_name)
+
+        # 1. Initialize the LayoutLMv3 model using the base class
+        # We start by initializing from the base configuration to ensure all weights are present
+        self.layoutlm = LayoutLMv3Model.from_pretrained("microsoft/layoutlmv3-base")
+
+        # 2. Try to load the fine-tuned weights from the Hugging Face Hub/Cache
+        try:
+            # This resolves the path to the downloaded model.safetensors in the cache
+            # Assumes you have renamed your file on the Hugging Face Hub to 'model.safetensors'
+            weights_path = cached_file(model_name, "model.safetensors")
+            fine_tuned_weights = load_file(weights_path)
+
+            # 3. Strip the Mismatching Prefix (Assuming 'layoutlm.' prefix from a previous wrapper)
+            new_state_dict = {}
+            prefix_to_strip = "layoutlm."
+
+            for key, value in fine_tuned_weights.items():
+                if key.startswith(prefix_to_strip):
+                    new_key = key[len(prefix_to_strip):]
+                    new_state_dict[new_key] = value
+                else:
+                    new_state_dict[key] = value
+
+            # 4. Load the fixed state dictionary into the LayoutLMv3Model
+            # strict=False allows us to ignore classifier/CRF weights not in LayoutLMv3Model
+            print("🔄 Successfully loaded and stripped keys. Loading base LayoutLMv3 weights...")
+
+            # Load only the weights for the transformer body
+            missing_keys, unexpected_keys = self.layoutlm.load_state_dict(new_state_dict, strict=False)
+
+            print(f"Weights loading done: {len(missing_keys)} missing, {len(unexpected_keys)} unexpected keys.")
+
+        except Exception as e:
+            print(f"❌ Fine-tuned weights could not be loaded directly and mapped. Starting with random weights.")
+            print(f"Error: {e}")
+            # Fallback: Load the LayoutLMv3 component directly from the Hub ID (will result in random weights for layers)
+            self.layoutlm = LayoutLMv3Model.from_pretrained(model_name)
+
+        # 5. Initialize the new heads (CRF layer and Classifier)
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Linear(self.layoutlm.config.hidden_size, num_labels)
         self.crf = CRF(num_labels)
@@ -218,7 +289,7 @@ class LayoutLMv3CRF(nn.Module):
 
 
 # -------------------------
-# Step 4: Training + Evaluation 
+# Step 4: Training + Evaluation
 # -------------------------
 def train_one_epoch(model, dataloader, optimizer, device):
     model.train()
@@ -241,41 +312,57 @@ def evaluate(model, dataloader, device, id2label):
         for batch in tqdm(dataloader, desc="Evaluating"):
             batch = {k: v.to(device) for k, v in batch.items()}
             labels = batch.pop("labels").cpu().numpy()
+            # The model returns a list of lists of predicted labels in inference mode
             preds = model(**batch)
             for p, l, mask in zip(preds, labels, batch["attention_mask"].cpu().numpy()):
                 valid = mask == 1
                 l = l[valid].tolist()
                 all_labels.extend(l)
+                # Ensure pred length matches label length for the unmasked tokens
                 all_preds.extend(p[:len(l)])
 
-    # Exclude the "O" label and other special tokens if necessary, but using 'micro' average
-    # on all valid tokens is typically fine for the initial evaluation.
+                # Exclude the "O" label and other special tokens if necessary, but using 'micro' average
     precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average="micro", zero_division=0)
     return precision, recall, f1
 
 
 # -------------------------
-# Step 5: Main Pipeline (Training) 
+# Step 5: Main Pipeline (Training) - MODIFIED MODEL/TOKENIZER LOADING
 # -------------------------
 def main(args):
-    # Labels (extend as needed)
-    labels = ["O", "B-QUESTION", "I-QUESTION", "B-OPTION", "I-OPTION", "B-ANSWER", "I-ANSWER"]
+    # LABELS UPDATED: Added SECTION_HEADING and PASSAGE
+    labels = [
+        "O",
+        "B-QUESTION", "I-QUESTION",
+        "B-OPTION", "I-OPTION",
+        "B-ANSWER", "I-ANSWER",
+        "B-SECTION_HEADING", "I-SECTION_HEADING",
+        "B-PASSAGE", "I-PASSAGE"
+    ]
     label2id = {l: i for i, l in enumerate(labels)}
     id2label = {i: l for l, i in label2id.items()}
 
-    # 1. Preprocess and save the initial training data
-    initial_bio_json = "training_data_bio_bboxes.json"
+    # --- SETUP: Use a temporary directory for intermediate files ---
+    TEMP_DIR = "temp_intermediate_files"
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    print(f"\n--- SETUP PHASE: Created temp directory: {TEMP_DIR} ---")
+
+    # 1. Preprocess
+    print("\n--- START PHASE: PREPROCESSING ---")
+    initial_bio_json = os.path.join(TEMP_DIR, "training_data_bio_bboxes.json")
     preprocess_labelstudio(args.input, initial_bio_json)
 
-    # 2. Augment the dataset with translated bboxes
-    augmented_bio_json = "augmented_training_data_bio_bboxes.json"
+    # 2. Augment
+    print("\n--- START PHASE: AUGMENTATION ---")
+    augmented_bio_json = os.path.join(TEMP_DIR, "augmented_training_data_bio_bboxes.json")
     final_data_path = augment_and_save_dataset(initial_bio_json, augmented_bio_json)
 
-    # Clean up the intermediary file (optional)
-    # os.remove(initial_bio_json)
-
     # 3. Load and split augmented dataset
-    tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
+    print("\n--- START PHASE: MODEL/DATASET SETUP ---")
+
+    # Load tokenizer from the specified Hugging Face ID
+    tokenizer = LayoutLMv3TokenizerFast.from_pretrained(HF_MODEL_ID)
+
     dataset = LayoutDataset(final_data_path, tokenizer, label2id, max_len=args.max_len)
     val_size = int(0.2 * len(dataset))
     train_size = len(dataset) - val_size
@@ -288,121 +375,34 @@ def main(args):
 
     # 4. Initialize and load model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LayoutLMv3CRF("microsoft/layoutlmv3-base", num_labels=len(labels)).to(device)
-    ckpt_path = "checkpoints/layoutlmv3_crf_new.pth"
+    print(f"Using device: {device}")
+
+    # Pass the Hugging Face ID and device to the custom model wrapper
+    model = LayoutLMv3CRF(HF_MODEL_ID, num_labels=len(labels), device=device).to(device)
+
+    ckpt_path = "checkpoints/layoutlmv3_crf_passage.pth"
     os.makedirs("checkpoints", exist_ok=True)
     if os.path.exists(ckpt_path):
-        print(f"🔄 Loading checkpoint from {ckpt_path}")
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
+        print(f"⚠️ Starting fresh training. Old checkpoint {ckpt_path} may be incompatible with new label count.")
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
     # 5. Training loop
     for epoch in range(args.epochs):
+        print(f"\n--- START PHASE: EPOCH {epoch + 1}/{args.epochs} TRAINING ---")
         avg_loss = train_one_epoch(model, train_loader, optimizer, device)
+
+        print(f"\n--- START PHASE: EPOCH {epoch + 1}/{args.epochs} EVALUATION ---")
         precision, recall, f1 = evaluate(model, val_loader, device, id2label)
+
         print(
             f"Epoch {epoch + 1}/{args.epochs} | Loss: {avg_loss:.4f} | P: {precision:.3f} R: {recall:.3f} F1: {f1:.3f}")
         torch.save(model.state_dict(), ckpt_path)
         print(f"💾 Model saved at {ckpt_path}")
 
 
-def run_inference(pdf_path, model_path, output_path):
-    # Load labels and tokenizer
-    labels = ["O", "B-QUESTION", "I-QUESTION", "B-OPTION", "I-OPTION", "B-ANSWER", "I-ANSWER"]
-    label2id = {l: i for i, l in enumerate(labels)}
-    id2label = {i: l for l, i in label2id.items()}
-    tokenizer = LayoutLMv3TokenizerFast.from_pretrained("microsoft/layoutlmv3-base")
-
-    # Load the trained model
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = LayoutLMv3CRF("microsoft/layoutlmv3-base", num_labels=len(labels)).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.eval()
-
-    # Process PDF with OCR
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception as e:
-        print(f"❌ Error opening PDF: {e}")
-        return
-
-    all_predictions = []
-    tesseract_config = '--psm 6'
-
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-
-        # Get a high-resolution image of the page for Tesseract
-        pix = page.get_pixmap(dpi=300)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-        # Get page dimensions from PyMuPDF
-        page_width, page_height = page.bound().width, page.bound().height
-
-        # Get OCR data (words and bboxes)
-        ocr_data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT, config=tesseract_config)
-        words = [word for word in ocr_data['text'] if word.strip()]
-
-        # Skip empty pages
-        if not words:
-            continue
-
-        # Get the scaling factors from the image resolution to the PDF's native resolution
-        x_scale = page_width / pix.width
-        y_scale = page_height / pix.height
-
-        # Create original pixel bboxes
-        bboxes_raw = [[
-            ocr_data['left'][i],
-            ocr_data['top'][i],
-            ocr_data['left'][i] + ocr_data['width'][i],
-            ocr_data['top'][i] + ocr_data['height'][i]
-        ] for i in range(len(ocr_data['text'])) if ocr_data['text'][i].strip()]
-
-        # Normalize bboxes to 0-1000 scale using the correct scaling factors
-        normalized_bboxes = [[
-            int(1000 * (b[0] * x_scale) / page_width),
-            int(1000 * (b[1] * y_scale) / page_height),
-            int(1000 * (b[2] * x_scale) / page_width),
-            int(1000 * (b[3] * y_scale) / page_height)
-        ] for b in bboxes_raw]
-
-        # Tokenize and run inference
-        inputs = tokenizer(words, boxes=normalized_bboxes, return_tensors="pt", truncation=True).to(device)
-
-        with torch.no_grad():
-            # The model is run on the normalized bboxes
-            preds = model(**inputs)
-
-        # Align predictions back to words
-        word_ids = inputs.word_ids(batch_index=0)
-        final_preds = []
-        previous_word_idx = None
-        for idx, word_id in enumerate(word_ids):
-            if word_id is not None and word_id != previous_word_idx:
-                # The model returns a list of predicted classes for each token
-                final_preds.append(id2label[preds[0][idx]])
-            previous_word_idx = word_id
-
-        # Prepare structured output
-        page_results = []
-        for word, bbox, label in zip(words, bboxes_raw, final_preds):
-            page_results.append({
-                "word": word,
-                "bbox": bbox,
-                "predicted_label": label
-            })
-        all_predictions.extend(page_results)
-
-    doc.close()
-    with open(output_path, "w") as f:
-        json.dump(all_predictions, f, indent=2, ensure_ascii=False)
-    print(f"✅ Inference complete. Predictions saved to {output_path}")
-
-
 # -------------------------
-# Step 7: Main Execution 
+# Step 7: Main Execution
 # -------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LayoutLMv3 Fine-tuning and Inference Script.")
@@ -419,7 +419,3 @@ if __name__ == "__main__":
         if not args.input:
             parser.error("--input is required for 'train' mode.")
         main(args)
-    elif args.mode == "infer":
-        if not args.input:
-            parser.error("--input is required for 'infer' mode.")
-        run_inference(args.input, "checkpoints/layoutlmv3_crf_new.pth", "inference_predictions.json")
