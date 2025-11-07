@@ -4,8 +4,4 @@ gunicorn
 gradio_client
 numpy
 werkzeug
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
 qdrant-client
