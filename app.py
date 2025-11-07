@@ -9,9 +9,17 @@ import json
 from datetime import datetime
 import random
 from gradio_api import call_layoutlm_api
-from drive_uploader import upload_to_drive,delete_from_drive
 from io import BytesIO
 
+"""
+===========================================================
+
+
+MODEL OPTIONS
+
+
+===========================================================
+"""
 app = Flask(__name__)
 CORS(app)
 
@@ -25,20 +33,22 @@ Helper Functions
 ====================================================================
 """
 
-from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata
+from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_session, fetch_test_by_testId, \
+    test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
+    update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
+    delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata
 from werkzeug.utils import secure_filename
-
-
 
 
 def format_mcq(mcq):
     return {
         "question": mcq.get("question") or mcq.get("ques") or mcq.get("q"),
-        "noise" : mcq.get("noise"),
+        "noise": mcq.get("noise"),
         "image": mcq.get("image") or mcq.get("img"),
         "options": mcq.get("options") or mcq.get("opts"),
         "answer": mcq.get("answer") or mcq.get("ans") or mcq.get("correct")
     }
+
 
 # ===================================================
 # uncomment the text below to use gemini pipeline instead of the pre-trained model
@@ -98,8 +108,6 @@ def load_vocabs(path: str) -> Tuple[Vocab, Vocab]:
         raise RuntimeError(f"Error loading vocabs from {path}: {e}")
 
 
-
-
 UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -122,47 +130,22 @@ def upload_pdf():
 
     print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
     if not pdf_file:
-        print("[ERROR] Missing PDF in request")
         return jsonify({"error": "PDF file not provided"}), 400
 
     if not all([user_id, title, description]):
-        print("[ERROR] Missing required fields (userId/title/description)")
         return jsonify({"error": "userId, title, description are required"}), 400
 
-    # 2. Move PDF in memory → temp → upload to Drive
-    print("[STEP] Reading PDF into memory")
-    original_name = secure_filename(pdf_file.filename)
-    in_memory_file = BytesIO(pdf_file.read())
+    # 2. Keep PDF in memory (no Drive)
+    print("[STEP] Reading PDF into memory...")
+    pdf_bytes = pdf_file.read()
+    pdf_name = secure_filename(pdf_file.filename)
 
-    temp_name = f"/tmp/{original_name}"
-    with open(temp_name, "wb") as temp:
-        temp.write(in_memory_file.getvalue())
-    print(f"[INFO] Temporary file created → {temp_name}")
-
-    print("[STEP] Uploading PDF to Google Drive...")
-    file_id = upload_to_drive(temp_name)
-    print(f"[SUCCESS] File uploaded. Drive File ID: {file_id}")
-
-    file_url = f"https://drive.google.com/uc?id={file_id}"
-
-    # Clean temp
-    try:
-        os.remove(temp_name)
-    except:
-        pass
-    print("[CLEANUP] Temp file removed")
-
-    # 3. Call LayoutLM API
-    print("[STEP] Calling LayoutLM API for MCQ extraction...")
-    final_data = call_layoutlm_api(file_id)
+    # 3. Directly call model
+    print("[STEP] Calling LayoutLM model directly (no Drive)...")
+    final_data = call_layoutlm_api(pdf_bytes, pdf_name)
     print(f"[SUCCESS] LayoutLM returned {len(final_data)} MCQs")
 
-    # ✅ Delete file from Drive after successful extraction
-    print("[CLEANUP] Deleting uploaded file from Google Drive...")
-    delete_from_drive(file_id)
-
     # 4. Add index to MCQs
-    print("[STEP] Formatting MCQs with indexes")
     indexed_mcqs = [
         {**mcq, "documentIndex": i}
         for i, mcq in enumerate(final_data)
@@ -171,7 +154,9 @@ def upload_pdf():
     # 5. Store in vector DB
     print("[STEP] Storing Question Bank in vector database...")
     createdAtTimestamp = datetime.now().isoformat()
-    stored_id = store_mcqs(user_id, title, description, indexed_mcqs, original_name, createdAtTimestamp)
+    stored_id = store_mcqs(
+        user_id, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+    )
     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
 
     print("[END] Request complete\n")
@@ -179,7 +164,7 @@ def upload_pdf():
         json.dumps({
             "generatedQAId": stored_id,
             "userId": user_id,
-            "fileName": original_name,
+            "fileName": pdf_name,
             "createdAt": createdAtTimestamp,
         }, ensure_ascii=False),
         mimetype="application/json"
@@ -202,7 +187,6 @@ def paper_sets_by_userID():
         if paper_set.get('metadata', {}).get('mcqs'):
             mcqs_list = paper_set['metadata']['mcqs']
 
-
             # This handles older data that might have missing or None 'documentIndex' values.
             paper_set['metadata']['mcqs'] = sorted(
                 mcqs_list,
@@ -219,29 +203,28 @@ def paper_sets_by_userID():
 
 @app.route("/question_bank_by_id", methods=["POST"])
 def paper_sets_by_generatedQAId():
-   data = request.get_json(silent=True) or request.form.to_dict()
-   generatedQAId = data.get("generatedQAId")
+    data = request.get_json(silent=True) or request.form.to_dict()
+    generatedQAId = data.get("generatedQAId")
 
-   if not generatedQAId:
-    return jsonify({"error": "generatedQAId is required"}), 400
+    if not generatedQAId:
+        return jsonify({"error": "generatedQAId is required"}), 400
 
-   results = fetch_mcqs(generatedQAId=generatedQAId)
+    results = fetch_mcqs(generatedQAId=generatedQAId)
 
-   if not results:
-       return jsonify({"error": "No MCQs found for the provided ID"}), 200
+    if not results:
+        return jsonify({"error": "No MCQs found for the provided ID"}), 200
 
-   if results and results[0].get('metadata', {}).get('mcqs'):
-       mcqs_list = results[0]['metadata']['mcqs']
-       # Sort by the 'documentIndex' field.
-       # Fall back to 0 if the index is missing, though it shouldn't be.
-       results[0]['metadata']['mcqs'] = sorted(
-           mcqs_list,
-           key=lambda x: x.get('documentIndex', 0)
-       )
-   # ===============================================
-   # Return the full list of results, as generated by fetch_mcqs
-   return jsonify(results)
-
+    if results and results[0].get('metadata', {}).get('mcqs'):
+        mcqs_list = results[0]['metadata']['mcqs']
+        # Sort by the 'documentIndex' field.
+        # Fall back to 0 if the index is missing, though it shouldn't be.
+        results[0]['metadata']['mcqs'] = sorted(
+            mcqs_list,
+            key=lambda x: x.get('documentIndex', 0)
+        )
+    # ===============================================
+    # Return the full list of results, as generated by fetch_mcqs
+    return jsonify(results)
 
 
 @app.route("/generate_test", methods=["POST"])
@@ -278,7 +261,6 @@ def generate_test():
 
     mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
 
-  
     # The list mcqs_data is now in the final, random order for the test.
 
     # 2. ASSIGN NEW SEQUENTIAL INDEX (testIndex)
@@ -303,7 +285,6 @@ def generate_test():
         "createdAt": createdAt,
         "questions": final_mcqs_for_storage  # Return the indexed list
     }), 200
-
 
 
 @app.route("/combined_paperset", methods=["POST"])
@@ -354,15 +335,12 @@ def combined_test():
     if not all_mcqs:
         return jsonify({"message": "No MCQs found for the provided IDs"}), 200
 
-
     # Assign a new, sequential index (testIndex) to each question
     final_mcqs_for_storage = []
     for i, mcq in enumerate(all_mcqs):
         # Assign a sequential index starting from 1
         mcq['testIndex'] = i + 1
         final_mcqs_for_storage.append(mcq)
-
-
 
     # Generate test metadata
     testId = str(uuid.uuid4())
@@ -485,6 +463,7 @@ def submit_test():
 
     return jsonify(response)
 
+
 @app.route("/submitted_tests/<userId>", methods=["GET"])
 def submitted_tests_history(userId):
     """
@@ -502,7 +481,6 @@ def submitted_tests_history(userId):
         return jsonify({"message": "No submitted tests found for this user"}), 200
 
     return jsonify(submitted_tests), 200
-
 
 
 @app.route("/question_bank/<generatedQAId>/edit", methods=["PUT"])
@@ -573,8 +551,6 @@ def edit_question_bank(generatedQAId):
     }), 200
 
 
-
-
 @app.route("/create_manual_question_bank", methods=["POST"])
 def create_manual_question_bank():
     """
@@ -630,7 +606,6 @@ def create_manual_question_bank():
     }), 201
 
 
-
 @app.route("/question_bank/<generatedQAId>", methods=["DELETE"])
 def delete_question_bank(generatedQAId):
     """
@@ -654,10 +629,6 @@ def delete_question_bank(generatedQAId):
         }), 404
 
 
-
-
-
-
 @app.route("/submitted_test/<testId>", methods=["DELETE"])
 def delete_submitted_test(testId):
     """
@@ -676,8 +647,6 @@ def delete_submitted_test(testId):
         return jsonify({
             "error": f"Failed to delete submitted test result '{testId}'. It may not exist."
         }), 404
-
-
 
 
 @app.route("/paper_sets/<testId>", methods=["DELETE"])
@@ -741,8 +710,6 @@ def edit_paperset(testId):
         }), 200
     else:
         return jsonify({"error": "Failed to update test session in database."}), 500
-
-
 
 
 if __name__ == '__main__':
