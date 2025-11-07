@@ -549,70 +549,110 @@ def submitted_tests_history(userId):
 
 
 
-@app.route("/question_bank/<generatedQAId>/edit", methods=["PUT"])
+@app.route("/question_bank/<generatedQAId>", methods=["PUT"])
 def edit_question_bank(generatedQAId):
     """
     Unified API to perform add, edit, or delete operations on questions,
     and update the question bank's Title and Description.
+
+    Accepts both:
+    1. {
+          "title": "English Test",
+          "description": "Updated chapter 1 test",
+          "edits": [ { "operation": "edit", "data": {...}} ]
+       }
+    2. [ { "operation": "edit", "data": {...}} ]  ← Legacy (frontend-only edits)
     """
+
+    # Step 1: Parse request JSON
     payload = request.get_json(silent=True) or {}
-    edits = payload.get("edits")
 
-    # Extract metadata fields directly from the payload
-    new_title = payload.get("title")
-    new_description = payload.get("description")
+    # Handle both dict and list payloads
+    if isinstance(payload, list):
+        edits = payload
+        new_title = None
+        new_description = None
+    else:
+        edits = payload.get("edits")
+        new_title = payload.get("title")
+        new_description = payload.get("description")
 
-    metadata_update_status = {"title_updated": False, "description_updated": False}
+    metadata_update_status = {
+        "title_updated": False,
+        "description_updated": False,
+        "success": True
+    }
 
-    # --- Step 1: Update Question Bank Metadata (Title/Description) ---
-    if new_title is not None or new_description is not None:
-        # Call the helper function to update only the metadata fields in the main collection
-        metadata_update_status = update_question_bank_metadata(
-            generatedQAId=generatedQAId,
-            title=new_title,
-            description=new_description
-        )
-        if not metadata_update_status.get("success", True):
-            # If the update failed, return an error immediately
-            return jsonify({"error": f"Failed to update metadata for Question Bank ID: {generatedQAId}"}), 500
+    # --- Step 2: Update Metadata (Title / Description) ---
+    try:
+        if new_title is not None or new_description is not None:
+            metadata_update_status = update_question_bank_metadata(
+                generatedQAId=generatedQAId,
+                title=new_title,
+                description=new_description
+            )
 
-    # --- Step 2: Process Question-level Edits ---
+            # Handle metadata update failure
+            if not metadata_update_status.get("success", True):
+                return jsonify({
+                    "error": f"Failed to update metadata for Question Bank ID: {generatedQAId}"
+                }), 500
+    except Exception as e:
+        print(f"[ERROR] Metadata update failed: {str(e)}")
+        metadata_update_status["success"] = False
+
+    # --- Step 3: Process Question-Level Edits ---
     if edits and isinstance(edits, list):
         for edit in edits:
-            operation = edit.get("operation")
-            data = edit.get("data")
+            try:
+                operation = edit.get("operation")
+                data = edit.get("data")
 
-            if not operation or not data:
+                if not operation or not data:
+                    continue
+
+                if operation == "add":
+                    add_single_question(generatedQAId, data)
+
+                elif operation == "edit":
+                    questionId = data.get("questionId")
+                    if questionId:
+                        update_single_question(questionId, data)
+
+                elif operation == "delete":
+                    questionId = data.get("questionId")
+                    if questionId:
+                        delete_single_question(questionId)
+
+                else:
+                    print(f"[WARN] Unknown operation '{operation}' ignored.")
+
+            except Exception as e:
+                print(f"[ERROR] Failed to process edit operation: {str(e)}")
                 continue
 
-            if operation == "add":
-                add_single_question(generatedQAId, data)
-            elif operation == "edit":
-                questionId = data.get("questionId")
-                if questionId:
-                    update_single_question(questionId, data)
-            elif operation == "delete":
-                questionId = data.get("questionId")
-                if questionId:
-                    delete_single_question(questionId)
-            else:
-                print(f"[WARN] Unknown operation '{operation}' ignored.")
-
-    # --- Step 3: Fetch Updated Data and Respond ---
-    updated_data = fetch_mcqs(generatedQAId=generatedQAId)
+    # --- Step 4: Fetch Updated Data for Response ---
+    try:
+        updated_data = fetch_mcqs(generatedQAId=generatedQAId)
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch updated question bank: {str(e)}")
+        updated_data = None
 
     if not updated_data:
         return jsonify({
-            "error": "Update operations processed, but the question bank was not found.",
+            "error": "Update processed, but the question bank was not found.",
             "generatedQAId_used": generatedQAId
         }), 404
 
-    updated_questions_count = len(updated_data[0].get("metadata", {}).get("mcqs", []))
+    updated_questions_count = len(
+        updated_data[0].get("metadata", {}).get("mcqs", [])
+    )
 
+    # --- Step 5: Return Success Response ---
     return jsonify({
         "message": "Question bank updated successfully",
-        "title_updated": metadata_update_status["title_updated"],
-        "description_updated": metadata_update_status["description_updated"],
+        "title_updated": metadata_update_status.get("title_updated", False),
+        "description_updated": metadata_update_status.get("description_updated", False),
         "updated_questions_count": updated_questions_count
     }), 200
 
@@ -695,7 +735,7 @@ def delete_question_bank(generatedQAId):
         # Return 404 if the bank wasn't found to delete, or 500 on database error
         return jsonify({
             "error": f"Failed to delete question bank '{generatedQAId}'. It may not exist."
-        }), 404
+        }), 200
 
 
 
@@ -737,7 +777,11 @@ def delete_test_session(testId):
 
     if success:
         return jsonify({
-            "message": f"Test session '{testId}' deleted successfully."
+            "message": f"Test '{testId}' deleted successfully."
+        }), 200
+    else:
+        return jsonify({
+            "message": f"Failed to delete '{testId}' "
         }), 200
 
 
