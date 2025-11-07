@@ -1,5 +1,3 @@
-
-
 import uuid
 import json,os
 import random
@@ -136,7 +134,6 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
             ("image", mcq.get("image")),
-            ("passage", mcq.get("passage") or ""),
             ("options", options_json),
             ("answer", mcq.get("answer", "")),
             ("documentIndex", i)
@@ -205,7 +202,6 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
                 ("question", payload.get("question")),
                 ("options", payload.get("options")),
                 ("answer", payload.get("answer")),
-                ("passage", payload.get("passage") or ""),
                 ("noise", payload.get("noise")),
                 ("image", payload.get("image")),
                 ("documentIndex", payload.get("documentIndex")),
@@ -470,7 +466,7 @@ def update_single_question(questionId, updated_data):
 
 def add_single_question(generatedQAId, question_data):
     try:
-        bank = client.get_point(collection_name=COLLECTION_MCQ, point_id=generatedQAId, with_payload=True)
+        bank = client.retrieve(collection_name=COLLECTION_MCQ, ids=[generatedQAId], with_payload=True)
         if not bank:
             print(f"Question bank {generatedQAId} not found")
             return False
@@ -525,7 +521,6 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
                 ("question", mcq.get("question") or ""),
                 ("noise", mcq.get("noise") or None),
                 ("image", mcq.get("image") or None),
-                ("passage", mcq.get("passage") or ""),
                 ("options", options_data),
                 ("answer", mcq.get("answer") or ""),
                 ("documentIndex", mcq.get("documentIndex"))
@@ -542,45 +537,78 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
         print("store_mcqs_for_manual_creation error:", e)
         return None
 
+
 def delete_mcq_bank(generatedQAId):
     try:
+        # Retrieve the MCQ bank
         bank = client.retrieve(collection_name=COLLECTION_MCQ, ids=[generatedQAId], with_payload=True)
-        if not bank:
+        if not bank or len(bank) == 0:
             print("bank not found")
             return False
-        filt = models.Filter(must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))])
+
+        print("Bank found:", bank)
+
+        # Find all associated questions
+        filt = models.Filter(
+            must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))]
+        )
         hits = client.scroll(collection_name=COLLECTION_QUESTIONS, limit=1000, scroll_filter=filt)
         hits = _normalize_scroll_result(hits)
+        print("Questions found:", hits)
+
+        # Collect IDs to delete
         ids_to_delete = []
         for h in hits:
-            # h may be dict or object; normalize id
             if isinstance(h, dict):
                 pid = h.get("id") or h.get("point_id") or h.get("pointId")
             else:
                 pid = getattr(h, "id", None) or getattr(h, "point_id", None)
             if pid:
                 ids_to_delete.append(pid)
+
+        # Delete questions
         if ids_to_delete:
-            client.delete(collection_name=COLLECTION_QUESTIONS, points=ids_to_delete)
-        client.delete(collection_name=COLLECTION_MCQ, points=[generatedQAId])
+            print("Deleting questions with IDs:", ids_to_delete)
+            client.delete(
+                collection_name=COLLECTION_QUESTIONS,
+                points_selector=models.PointIdsList(points=ids_to_delete)
+            )
+
+        # Delete the MCQ bank itself
+        print("Deleting MCQ bank with ID:", generatedQAId)
+        client.delete(
+            collection_name=COLLECTION_MCQ,
+            points_selector=models.PointIdsList(points=[generatedQAId])
+        )
+
         return True
+
     except Exception as e:
         print("delete_mcq_bank error:", e)
         return False
 
 def delete_test_session_by_id(testId):
     try:
+        # 1️⃣ Delete from test_sessions_collection
+        client.delete(
+            collection_name=COLLECTION_TEST_SESSIONS,
+            points_selector=models.PointIdsList(points=[testId])
+        )
+
+        # 2️⃣ Delete from submitted_tests_collection (if exists)
+
+        filt = models.Filter(
+            must=[models.FieldCondition(key="testId", match=models.MatchValue(value=testId))]
+        )
         client.delete(
             collection_name=COLLECTION_SUBMITTED,
-            points_selector=models.PointIdsList(
-                points=[testId]
-            )
+            points_selector=models.FilterSelector(filter=filt)
         )
         return True
+
     except Exception as e:
         print("delete_test_session_by_id error:", e)
         return False
-
 def delete_submitted_test_by_id(testId):
     try:
         client.delete(
