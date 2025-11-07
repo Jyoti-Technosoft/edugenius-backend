@@ -82,10 +82,13 @@ def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
         return {"status_message": status_message, "raw_output": structured_mcq_output}
 
 
-def call_layoutlm_api(pdf_bytes: bytes, filename: str) -> Dict[str, Any]:
+def call_layoutlm_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     """
-    Send an in-memory PDF directly to the Hugging Face model (no Drive upload).
+    Send an in-memory PDF or image directly to the Hugging Face model (no Drive upload).
+    Supports .pdf, .png, .jpg, .jpeg automatically.
     """
+    import mimetypes
+
     load_env()
     hf_space = os.environ.get("HF_SPACE")
     if not hf_space:
@@ -97,12 +100,15 @@ def call_layoutlm_api(pdf_bytes: bytes, filename: str) -> Dict[str, Any]:
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
-    # Create a temporary file on disk (needed because the gradio client expects a path)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(pdf_bytes)
+    # ✅ detect correct extension
+    ext = os.path.splitext(filename)[-1].lower()
+
+    # ✅ create temp file with same extension
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(file_bytes)
         tmp_path = tmp.name
 
-    print(f"[STEP] Sending {filename} to LayoutLM model...")
+    print(f"[STEP] Sending {filename} ({ext}) to LayoutLM model...")
 
     structured_input_list = [{
         "path": tmp_path,
@@ -119,7 +125,7 @@ def call_layoutlm_api(pdf_bytes: bytes, filename: str) -> Dict[str, Any]:
         except:
             pass
 
-    # Normalize response
+    # ✅ Normalize response
     if isinstance(response, (dict, list)):
         return response
 
