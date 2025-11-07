@@ -3,11 +3,11 @@
 # client.view_api()
 
 
-import os
+import os,tempfile
 import json
 from typing import Dict, Any, Tuple
 from gradio_client import Client
-from drive_uploader import get_file_content_in_memory,load_env
+from drive_uploader import load_env
 
 
 
@@ -82,53 +82,30 @@ def call_edugenius_api(pdf_path: str) -> Dict[str, Any]:
         return {"status_message": status_message, "raw_output": structured_mcq_output}
 
 
-
-
-
-def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
-    load_env()  # make sure env is loaded before using
+def call_layoutlm_api(pdf_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """
+    Send an in-memory PDF directly to the Hugging Face model (no Drive upload).
+    """
+    load_env()
     hf_space = os.environ.get("HF_SPACE")
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
-    """
 
-    Args:
-        pdf_path: The local file path to the PDF document.
-
-    Returns:
-        A dictionary (JSON object) containing the parsed layout data.
-
-    Raises:
-        FileNotFoundError: If the PDF file doesn't exist.
-        ConnectionError: If the Space connection fails.
-        ValueError: If the API call fails due to invalid file or processing error.
-    """
-    # 1. Check if the local file exists
-
-    """
-        Fetches PDF directly from Drive, loads in memory, and sends to the Hugging Face Space API.
-    """
-    print(f"Fetching file ID {pdf_path} from Drive...")
-    file_stream = get_file_content_in_memory(pdf_path)
-
-        # Save temporary in memory for API client compatibility
-    temp_path = "/tmp/temp_drive_file.pdf"
-    with open(temp_path, "wb") as f:
-         f.write(file_stream.read())
-
-    print("Calling LayoutLM API...")
+    print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
     try:
         client = Client(hf_space)
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
-    # structured_input = {
-    #      "path": temp_path,
-    #      "meta": {"_type": "gradio.FileData"}
-    #     }
-    
+    # Create a temporary file on disk (needed because the gradio client expects a path)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+
+    print(f"[STEP] Sending {filename} to LayoutLM model...")
+
     structured_input_list = [{
-        "path": temp_path,
+        "path": tmp_path,
         "meta": {"_type": "gradio.FileData"}
     }]
 
@@ -136,14 +113,13 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
         response = client.predict(structured_input_list, api_name="/predict")
     except Exception as e:
         raise ValueError(f"LayoutLM API call failed: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
 
-        # Clean up temp
-    try:
-        os.remove(temp_path)
-    except:
-        pass
-
-        # Normalize response
+    # Normalize response
     if isinstance(response, (dict, list)):
         return response
 
@@ -155,13 +131,13 @@ def call_layoutlm_api(pdf_path: str) -> Dict[str, Any]:
                 try:
                     return json.loads(item)
                 except json.JSONDecodeError:
-                     continue
+                    continue
         return {"raw_output": response}
 
     if isinstance(response, str):
         try:
             return json.loads(response)
         except json.JSONDecodeError:
-             return {"raw_output": response}
+            return {"raw_output": response}
 
     return {"raw_output": response}
