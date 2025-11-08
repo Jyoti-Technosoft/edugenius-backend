@@ -382,7 +382,7 @@ def test_sessions_by_userId(userId):
         print("test_sessions_by_userId error:", e)
         return None
 
-def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions):
+def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions,total_correct):
     try:
         userIdClean = str(userId).strip().lower()
         payload = {
@@ -394,7 +394,8 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "submittedAt": submittedAt,
             "score": score,
             "total_questions": total_questions,
-            "detailed_results": json.dumps(detailed_results)
+            "detailed_results": json.dumps(detailed_results),
+            "total_correct":total_correct
         }
         vec = embed(f"submitted_test:{testId}")[0]
         p = models.PointStruct(id=testId, vector=vec, payload=payload)
@@ -441,25 +442,59 @@ def delete_single_question(questionId):
 
 def update_single_question(questionId, updated_data):
     try:
-        existing = client.retrieve(collection_name=COLLECTION_QUESTIONS, ids=[questionId], with_payload=True)
-        if not existing:
+        # 🔹 Retrieve existing question (Qdrant returns a list)
+        existing = client.retrieve(
+            collection_name=COLLECTION_QUESTIONS,
+            ids=[questionId],
+            with_payload=True
+        )
+        print(existing[0].payload)
+        if not existing or len(existing) == 0:
+            print(f"[WARN] Question ID {questionId} not found in COLLECTION_QUESTIONS")
             return False
-        existing_payload = _extract_payload(existing)
-        # preserve important ids
+
+        # Extract payload correctly (take first element)
+        existing_payload = _extract_payload(existing[0])
+
+        # 🔹 Preserve key identifiers
         updated_data['questionId'] = questionId
         updated_data['generatedQAId'] = existing_payload.get("generatedQAId")
         updated_data['userId'] = existing_payload.get("userId")
-        # normalize options
+
+        # 🔹 Normalize options (convert to JSON string)
         if 'options' in updated_data:
-            if isinstance(updated_data['options'], (dict, list)):
-                updated_data['options'] = json.dumps(updated_data['options'])
-            elif updated_data['options'] is None:
+            options = updated_data['options']
+            if isinstance(options, (dict, list)):
+                updated_data['options'] = json.dumps(options)
+            elif options is None:
                 updated_data['options'] = json.dumps({})
-        payload = _to_payload_for_question(updated_data)
-        vec = embed(updated_data.get("question", ""))[0]
+            else:
+                # In case frontend sent "(A)": "A. Berlin" etc. inside data
+                try:
+                    json.loads(options)
+                except Exception:
+                    updated_data['options'] = json.dumps({
+                        k: v for k, v in options.items()
+                    }) if isinstance(options, dict) else json.dumps({})
+
+        # 🔹 Merge with existing payload (preserve fields not sent from UI)
+        merged_payload = existing_payload.copy()
+        merged_payload.update(updated_data)
+
+        # 🔹 Convert payload into Qdrant format
+        payload = _to_payload_for_question(merged_payload)
+
+        # 🔹 Update vector based on question text
+        question_text = updated_data.get("question", "") or existing_payload.get("question", "")
+        vec = embed(question_text)[0]
+
+        # 🔹 Upsert updated point
         p = models.PointStruct(id=questionId, vector=vec, payload=payload)
-        client.upsert(collection_name=COLLECTION_QUESTIONS, points=[p])
+        client.upsert(collection_name=COLLECTION_QUESTIONS, points=[p], wait=True)
+
+        print(f"[INFO] Question {questionId} updated successfully.")
         return True
+
     except Exception as e:
         print("update_single_question error:", e)
         return False
