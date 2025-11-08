@@ -455,8 +455,8 @@ def test_history_by_userId(userId):
 @app.route("/submit_test", methods=["POST"])
 def submit_test():
     """
-    API to submit student answers and get results,
-    and also to store the submission for future analysis.
+    API to submit student answers, calculate score percentage,
+    and store submission data for future analysis.
     """
     payload = request.get_json(silent=True) or {}
     answers = payload.get("answers")
@@ -465,19 +465,20 @@ def submit_test():
     testTitle = payload.get("testTitle")
     timeSpent = payload.get("timeSpent")
     totalTime = payload.get("totalTime")
-    submittedAt = datetime.now().isoformat()
     totalQuestions = payload.get("totalQuestions")
+    submittedAt = datetime.now().isoformat()
 
+    # ✅ Validation
     if not all([userId, testId, answers, submittedAt]):
         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
 
     if not isinstance(answers, list):
         return jsonify({"error": "Answers must be a list"}), 400
 
-    score = 0
-
+    total_correct = 0
     detailed_results = []
 
+    # ✅ Loop through answers
     for item in answers:
         question = item.get("question")
         submitted_answer = item.get("your_answer")
@@ -486,7 +487,7 @@ def submit_test():
         if question and submitted_answer and correct_answer:
             is_correct = (submitted_answer == correct_answer)
             if is_correct:
-                score += 1
+                total_correct += 1
 
             detailed_results.append(OrderedDict([
                 ("question", question),
@@ -500,7 +501,13 @@ def submit_test():
                 ("error", "Missing required fields")
             ]))
 
-    # Now, we store the results in the database
+    # ✅ Calculate percentage
+    if totalQuestions and int(totalQuestions) > 0:
+        percentage = round((total_correct / int(totalQuestions)) * 100, 2)
+    else:
+        percentage = 0.0
+
+    # ✅ Store results
     is_stored = store_submitted_test(
         userId=userId,
         testId=testId,
@@ -509,16 +516,19 @@ def submit_test():
         totalTime=totalTime,
         submittedAt=submittedAt,
         detailed_results=detailed_results,
-        score=score,
-        total_questions=totalQuestions
+        score=percentage,  # score same as total_correct
+        total_questions=totalQuestions,
+        total_correct=total_correct
     )
 
     if not is_stored:
         return jsonify({"error": "Failed to store submission"}), 500
 
+    # ✅ Response
     response = OrderedDict([
         ("total_questions", totalQuestions),
-        ("score", score),
+        ("total_correct", total_correct),
+        ("score", percentage),
         ("testTitle", testTitle),
         ("submittedAt", submittedAt),
         ("userId", userId),
