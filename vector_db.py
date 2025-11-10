@@ -382,10 +382,13 @@ def test_sessions_by_userId(userId):
         print("test_sessions_by_userId error:", e)
         return None
 
-def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions,total_correct):
+def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions, total_correct):
     try:
         userIdClean = str(userId).strip().lower()
+        attemptId = str(uuid.uuid4())  # 🔹 Unique ID for each test attempt
+
         payload = {
+            "attemptId": attemptId,
             "userId": userIdClean,
             "testId": testId,
             "testTitle": testTitle,
@@ -395,12 +398,18 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "score": score,
             "total_questions": total_questions,
             "detailed_results": json.dumps(detailed_results),
-            "total_correct":total_correct
+            "total_correct": total_correct
         }
-        vec = embed(f"submitted_test:{testId}")[0]
-        p = models.PointStruct(id=testId, vector=vec, payload=payload)
+
+        # Use testId + attemptId to make vector unique per attempt
+        vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
+
+        # Store using attemptId as unique point ID
+        p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
+
         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
-        return True
+        return True,attemptId
+
     except Exception as e:
         print("store_submitted_test error:", e)
         return False
@@ -408,8 +417,74 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
 def submitted_tests_by_userId(userId):
     try:
         userIdClean = str(userId).strip().lower()
-        filt = models.Filter(must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))])
+
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
+            ]
+        )
+
         dummy_vector = [0.0] * VECTOR_DIM
+        hits = client.search(
+            collection_name=COLLECTION_SUBMITTED,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=2000,
+            with_payload=True
+        )
+
+        if not hits:
+            return []
+
+        all_attempts = []
+        for h in hits:
+            payload = _extract_payload(h)
+            if not payload:
+                continue
+
+            if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
+                try:
+                    payload["detailed_results"] = json.loads(payload["detailed_results"])
+                except Exception:
+                    pass
+
+            payload["attemptId"] = payload.get("attemptId") or _extract_id(h)
+            payload["testId"] = payload.get("testId")
+            all_attempts.append(payload)
+
+        # 🔹 Group attempts by testId, keeping only the latest one per test
+        latest_by_test = {}
+        for attempt in all_attempts:
+            test_id = attempt.get("testId")
+            if not test_id:
+                continue
+            existing = latest_by_test.get(test_id)
+            if not existing or attempt.get("submittedAt", "") > existing.get("submittedAt", ""):
+                latest_by_test[test_id] = attempt
+
+        # 🔹 Convert dict to sorted list (latest first)
+        latest_attempts = sorted(
+            latest_by_test.values(),
+            key=lambda x: x.get("submittedAt", ""),
+            reverse=True
+        )
+
+        return latest_attempts
+
+    except Exception as e:
+        print("submitted_tests_by_userId error:", e)
+        return []
+
+def fetch_submitted_test_by_testId(testId):
+    try:
+        # 🔹 Use a filter instead of retrieve(), since attempts are stored by attemptId
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(key="testId", match=models.MatchValue(value=testId))
+            ]
+        )
+
+        dummy_vector = [0.0] * VECTOR_DIM  # Placeholder since we only need payloads
         hits = client.search(
             collection_name=COLLECTION_SUBMITTED,
             query_vector=dummy_vector,
@@ -417,19 +492,36 @@ def submitted_tests_by_userId(userId):
             limit=1000,
             with_payload=True
         )
-        sessions = []
+
+        if not hits:
+            return None
+
+        attempts = []
         for h in hits:
             payload = _extract_payload(h)
+            if not payload:
+                continue
+
+            # Decode detailed_results if JSON string
             if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
                 try:
                     payload["detailed_results"] = json.loads(payload["detailed_results"])
                 except Exception:
-                    payload["detailed_results"] = payload["detailed_results"]
-            payload["testId"] = payload.get("testId") or _extract_id(h)
-            sessions.append(payload)
-        return sessions
+                    pass
+
+            # Ensure testId and attemptId are set
+            payload["testId"] = payload.get("testId") or testId
+            payload["attemptId"] = payload.get("attemptId") or _extract_id(h)
+
+            attempts.append(payload)
+
+        # 🔹 Sort attempts by submittedAt (latest first)
+        attempts.sort(key=lambda x: x.get("submittedAt", ""), reverse=True)
+
+        return attempts
+
     except Exception as e:
-        print("submitted_tests_by_userId error:", e)
+        print("fetch_submitted_test_by_testId error:", e)
         return None
 
 def delete_single_question(questionId):
@@ -656,6 +748,28 @@ def delete_submitted_test_by_id(testId):
     except Exception as e:
         print("delete_submitted_test_by_id error:", e)
         return False
+
+def delete_submitted_test_attempt(attemptId):
+        """
+        Delete a specific submitted test attempt from Qdrant using attemptId.
+        """
+        try:
+            if not attemptId:
+                print("delete_submitted_test_attempt error: attemptId is required")
+                return False
+
+            # AttemptId is stored as the point ID in Qdrant
+            client.delete(
+                collection_name=COLLECTION_SUBMITTED,
+                points_selector=models.PointIdsList(points=[attemptId])
+            )
+
+            print(f"[Qdrant] Deleted submitted test attempt: {attemptId}")
+            return True
+
+        except Exception as e:
+            print("delete_submitted_test_attempt error:", e)
+            return False
 
 def update_test_session(testId, updated_metadata):
     try:
