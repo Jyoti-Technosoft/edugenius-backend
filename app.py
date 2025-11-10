@@ -32,7 +32,7 @@ Helper Functions
 ====================================================================
 """
 
-from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata
+from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata,fetch_submitted_test_by_testId,delete_submitted_test_attempt
 from werkzeug.utils import secure_filename
 
 
@@ -508,7 +508,7 @@ def submit_test():
         percentage = 0.0
 
     # ✅ Store results
-    is_stored = store_submitted_test(
+    is_stored,attemptId = store_submitted_test(
         userId=userId,
         testId=testId,
         testTitle=testTitle,
@@ -534,7 +534,8 @@ def submit_test():
         ("userId", userId),
         ("testId", testId),
         ("timeSpent", timeSpent),
-        ("detailed_results", detailed_results)
+        ("detailed_results", detailed_results),
+        ("attemptId",attemptId)
     ])
 
     return jsonify(response)
@@ -556,6 +557,22 @@ def submitted_tests_history(userId):
         return jsonify({"message": "No submitted tests found for this user"}), 200
 
     return jsonify(submitted_tests), 200
+
+
+@app.route("/submitted_test/<testId>", methods=["GET"])
+def get_single_submitted_test(testId):
+    """
+    Fetch details of one submitted test by testId.
+    """
+    if not testId:
+        return jsonify({"error": "testId is required"}), 400
+
+    result = fetch_submitted_test_by_testId(testId)
+
+    if not result:
+        return jsonify({"message": "No submitted test found"}), 404
+
+    return jsonify(result), 200
 
 
 
@@ -749,9 +766,6 @@ def delete_question_bank(generatedQAId):
 
 
 
-
-
-
 @app.route("/submitted_test/<testId>", methods=["DELETE"])
 def delete_submitted_test(testId):
     """
@@ -795,7 +809,24 @@ def delete_test_session(testId):
         }), 200
 
 
-@app.route("/paper_sets/<testId>/edit", methods=["PUT"])
+@app.route("/test_attempt/<attemptId>", methods=["DELETE"])
+def delete_submitted_test_attempt_api(attemptId):
+    """
+    API to delete a specific submitted test attempt by attemptId.
+    """
+    if not attemptId:
+        return jsonify({"error": "attemptId is required"}), 400
+
+    success = delete_submitted_test_attempt(attemptId)
+    if not success:
+        return jsonify({"error": "Failed to delete attempt"}), 200
+
+    return jsonify({
+        "message": f"Attempt {attemptId} deleted successfully"
+    }), 200
+
+
+@app.route("/paper_sets/<testId>", methods=["PUT"])
 def edit_paperset(testId):
     """
     Unified API to edit an existing test session's metadata (e.g., totalTime, title)
