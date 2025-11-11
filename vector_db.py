@@ -1,4 +1,4 @@
-import uuid
+import uuid,re
 import json,os
 import random
 from collections import OrderedDict
@@ -98,6 +98,107 @@ def _to_payload_for_question(meta: Dict[str, Any]):
         p["options"] = json.dumps(p["options"])
     return p
 
+def update_answer_flag_in_qdrant(generatedQAId: str, all_have_answers: bool):
+    """
+    Updates the `answerFound` flag in the Qdrant question bank (COLLECTION_MCQ)
+    for a specific generatedQAId.
+    """
+    try:
+        client.set_payload(
+            collection_name=COLLECTION_MCQ,
+            payload={"answerFound": all_have_answers},
+            points=[generatedQAId]
+        )
+        print(f"[INFO] Updated answerFound={all_have_answers} for generatedQAId={generatedQAId}")
+    except Exception as e:
+        print(f"[WARN] Failed to update answerFound flag in Qdrant: {e}")
+
+
+# --- Helper: Normalize text safely ---
+def normalize_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip()
+    # remove "Answer:", "Correct Answer:", etc.
+    s = re.sub(r'^(correct\s*)?(answer|ans)\s*[:\-]*', '', s, flags=re.IGNORECASE)
+    # remove brackets, dots, extra punctuation
+    s = re.sub(r'^[\(\[\{]+', '', s)
+    s = re.sub(r'[\)\]\}]+$', '', s)
+    s = s.strip().rstrip('.')
+    return s.strip()
+
+# --- Helper: detect invalid/unusable answers ---
+def is_invalid_answer(ans: str) -> bool:
+    if not ans:
+        return True
+    ans_low = ans.lower().strip()
+    invalid_patterns = [
+        "not true", "no answer", "none", "not given", "n/a", "no correct",
+        "no option", "no valid", "invalid", "answer is not", "null", "skip"
+    ]
+    return any(p in ans_low for p in invalid_patterns)
+
+# --- Helper: map normalized answer text to option key ---
+def map_answer_to_option(normalized_answer: str, options: dict) -> str | None:
+    if not normalized_answer:
+        return None
+
+    norm = normalized_answer.strip().lower()
+
+    # (1) Simple letter only ("a", "b", etc.)
+    m = re.match(r'^([a-zA-Z])$', norm)
+    if m:
+        key = f"({m.group(1).upper()})"
+        if key in options:
+            return key
+
+    # (2) With brackets or dots: "(A)", "A.", etc.
+    m = re.match(r'^\(?([a-zA-Z])\)?\.?$', norm)
+    if m:
+        key = f"({m.group(1).upper()})"
+        if key in options:
+            return key
+
+    # (3) Check for match in text (e.g. "Paris" → "(B)")
+    normalized_options = {}
+    for k, v in (options or {}).items():
+        if not v:
+            continue
+        text = str(v).strip()
+        # remove "A. " or "A) "
+        text = re.sub(r'^[A-Za-z]\s*[\.\)\-:]\s*', '', text)
+        normalized_options[k] = text.lower()
+
+    for k, opt_val in normalized_options.items():
+        if norm == opt_val or norm in opt_val or opt_val in norm:
+            return k
+
+    return None
+
+# --- Helper: clean text from MCQ ---
+def clean_mcq_text(mcq):
+    """Remove trailing 'Correct' or 'Correct Answer:' etc. from options & answers"""
+    cleaned_opts = {}
+    for k, v in (mcq.get("options") or {}).items():
+        if not v:
+            continue
+        v_clean = re.sub(r'\b(Correct|Correct Answer|correct answer)\b', '', str(v), flags=re.IGNORECASE).strip()
+        cleaned_opts[k] = v_clean
+    mcq["options"] = cleaned_opts
+
+    ans = mcq.get("answer", "")
+    if ans:
+        ans = re.sub(r'^(Correct\s*Answer\s*[:\-]*)', '', ans, flags=re.IGNORECASE)
+        mcq["answer"] = ans.strip()
+    return mcq
+
+# --- Helper: split multi answers (like "A,B") ---
+def split_multi_answers(s: str) -> list:
+    if not s:
+        return []
+    return [p.strip() for p in re.split(r'[,;/\n]+', s) if p.strip()]
+
+# --- MAIN FUNCTION ---
 def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     userIdClean = str(userId).strip().lower()
     generatedQAId = str(uuid.uuid4())
@@ -112,21 +213,44 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     }
 
     bank_vector = embed(f"{title} {description}")[0]
-    bank_point = models.PointStruct(id=generatedQAId, vector=bank_vector, payload=_to_payload_for_bank(metadata_for_bank))
-    client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
 
     question_points = []
+    all_have_answers = True
+    BATCH_SIZE = 256
+
     for i, mcq in enumerate(mcqs):
+        mcq = clean_mcq_text(mcq)  # ✅ clean "Correct" etc.
+
+        raw_answer = mcq.get("answer", "")
+        normalized = normalize_text(raw_answer)
+
+        # check for invalid cases
+        if is_invalid_answer(normalized):
+            canonical_answer = ""
+        else:
+            options = mcq.get("options", {}) or {}
+            parts = split_multi_answers(normalized)
+            mapped_keys = []
+
+            for part in parts:
+                mapped = map_answer_to_option(normalize_text(part), options)
+                if mapped:
+                    mapped_keys.append(mapped)
+
+            canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
+
+        # if no valid answer found
+        if not canonical_answer:
+            all_have_answers = False
+
+        # assign new IDs
         questionId = str(uuid.uuid4())
-        mcq['generatedQAId'] = generatedQAId
-        mcq['questionId'] = questionId
-        mcq['userId'] = userIdClean
-        mcq['documentIndex'] = i
+        mcq["questionId"] = questionId
+        mcq["generatedQAId"] = generatedQAId
+        mcq["userId"] = userIdClean
+        mcq["documentIndex"] = i
 
-        options_json = json.dumps(mcq.get("options", {}))
-        question_text = mcq.get("question", "") or ""
-        q_vec = embed(question_text)[0]
-
+        # --- payload ---
         q_meta = OrderedDict([
             ("questionId", questionId),
             ("generatedQAId", generatedQAId),
@@ -134,22 +258,39 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
             ("image", mcq.get("image")),
-            ("options", options_json),
-            ("answer", mcq.get("answer", "")),
+            ("passage", mcq.get("passage") or ""),
+            ("options", json.dumps(mcq.get("options", {}))),
+            ("answer", canonical_answer),  # ✅ only one field, format "(A)"
             ("documentIndex", i)
         ])
 
-        point = models.PointStruct(id=questionId, vector=q_vec, payload=_to_payload_for_question(q_meta))
+        q_vec = embed(mcq.get("question", "") or "")[0]
+        point = models.PointStruct(
+            id=questionId,
+            vector=q_vec,
+            payload=_to_payload_for_question(q_meta)
+        )
         question_points.append(point)
 
-        if len(question_points) >= 256:
+        if len(question_points) >= BATCH_SIZE:
             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
             question_points = []
 
     if question_points:
         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
 
-    return generatedQAId
+    # --- Step 3: Bank-level answer flag ---
+    metadata_for_bank["answerFound"] = all_have_answers
+    bank_point = models.PointStruct(
+        id=generatedQAId,
+        vector=bank_vector,
+        payload=_to_payload_for_bank(metadata_for_bank)
+    )
+    client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+
+    update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
+    print(f"[INFO] All answers found: {all_have_answers}")
+    return generatedQAId, all_have_answers
 
 def fetch_mcqs(userId: str = None, generatedQAId: str = None):
     results = []
@@ -202,6 +343,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
                 ("question", payload.get("question")),
                 ("options", payload.get("options")),
                 ("answer", payload.get("answer")),
+                ("passage", payload.get("passage") or ""),
                 ("noise", payload.get("noise")),
                 ("image", payload.get("image")),
                 ("documentIndex", payload.get("documentIndex")),
@@ -540,7 +682,7 @@ def update_single_question(questionId, updated_data):
             ids=[questionId],
             with_payload=True
         )
-        print(existing[0].payload)
+
         if not existing or len(existing) == 0:
             print(f"[WARN] Question ID {questionId} not found in COLLECTION_QUESTIONS")
             return False
@@ -648,6 +790,7 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
                 ("question", mcq.get("question") or ""),
                 ("noise", mcq.get("noise") or None),
                 ("image", mcq.get("image") or None),
+                ("passage", mcq.get("passage") or ""),
                 ("options", options_data),
                 ("answer", mcq.get("answer") or ""),
                 ("documentIndex", mcq.get("documentIndex"))
