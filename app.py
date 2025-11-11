@@ -32,21 +32,22 @@ Helper Functions
 ====================================================================
 """
 
-from vector_db import store_mcqs, fetch_mcqs,fetch_random_mcqs, store_test_session, fetch_test_by_testId,test_sessions_by_userId,store_submitted_test, submitted_tests_by_userId,add_single_question,update_single_question,delete_single_question,store_mcqs_for_manual_creation, delete_mcq_bank, delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata,fetch_submitted_test_by_testId,delete_submitted_test_attempt
+from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_session, fetch_test_by_testId, \
+    test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
+    update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
+    delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant
 from werkzeug.utils import secure_filename
-
-
 
 
 def format_mcq(mcq):
     return {
         "question": mcq.get("question") or mcq.get("ques") or mcq.get("q"),
-        "noise" : mcq.get("noise"),
+        "noise": mcq.get("noise"),
         "image": mcq.get("image") or mcq.get("img"),
         "options": mcq.get("options") or mcq.get("opts"),
         "answer": mcq.get("answer") or mcq.get("ans") or mcq.get("correct")
     }
-
 # ===================================================
 # uncomment the text below to use gemini pipeline instead of the pre-trained model
 # ===================================================
@@ -105,8 +106,6 @@ def load_vocabs(path: str) -> Tuple[Vocab, Vocab]:
         raise RuntimeError(f"Error loading vocabs from {path}: {e}")
 
 
-
-
 UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -146,14 +145,18 @@ def upload_pdf():
 
     # 4. Add index to MCQs
     indexed_mcqs = [
-        {**mcq, "documentIndex": i}
+        {
+            **mcq,
+            "documentIndex": i,
+            "questionId": str(uuid.uuid4())  # ✅ assign unique ID
+        }
         for i, mcq in enumerate(final_data)
     ]
 
     # 5. Store in vector DB
     print("[STEP] Storing Question Bank in vector database...")
     createdAtTimestamp = datetime.now().isoformat()
-    stored_id = store_mcqs(
+    stored_id, all_have_answers = store_mcqs(
         user_id, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
     )
     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
@@ -165,9 +168,11 @@ def upload_pdf():
             "userId": user_id,
             "fileName": pdf_name,
             "createdAt": createdAtTimestamp,
+            "answerFound": all_have_answers
         }, ensure_ascii=False),
         mimetype="application/json"
     )
+
 
 @app.route("/create_question_bank_image", methods=["POST"])
 def upload_image():
@@ -230,7 +235,6 @@ def upload_image():
         }, ensure_ascii=False),
         mimetype="application/json"
     )
-
 @app.route("/question_bank_by_user", methods=["POST"])
 def paper_sets_by_userID():
     data = request.get_json(silent=True) or request.form.to_dict()
@@ -246,7 +250,6 @@ def paper_sets_by_userID():
         if paper_set.get('metadata', {}).get('mcqs'):
             mcqs_list = paper_set['metadata']['mcqs']
 
-
             # This handles older data that might have missing or None 'documentIndex' values.
             paper_set['metadata']['mcqs'] = sorted(
                 mcqs_list,
@@ -259,33 +262,30 @@ def paper_sets_by_userID():
         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
         mimetype="application/json"
     )
-
-
 @app.route("/question_bank_by_id", methods=["POST"])
 def paper_sets_by_generatedQAId():
-   data = request.get_json(silent=True) or request.form.to_dict()
-   generatedQAId = data.get("generatedQAId")
+    data = request.get_json(silent=True) or request.form.to_dict()
+    generatedQAId = data.get("generatedQAId")
 
-   if not generatedQAId:
-    return jsonify({"error": "generatedQAId is required"}), 400
+    if not generatedQAId:
+        return jsonify({"error": "generatedQAId is required"}), 400
 
-   results = fetch_mcqs(generatedQAId=generatedQAId)
+    results = fetch_mcqs(generatedQAId=generatedQAId)
 
-   if not results:
-       return jsonify({"error": "No MCQs found for the provided ID"}), 200
+    if not results:
+        return jsonify({"error": "No MCQs found for the provided ID"}), 200
 
-   if results and results[0].get('metadata', {}).get('mcqs'):
-       mcqs_list = results[0]['metadata']['mcqs']
-       # Sort by the 'documentIndex' field.
-       # Fall back to 0 if the index is missing, though it shouldn't be.
-       results[0]['metadata']['mcqs'] = sorted(
-           mcqs_list,
-           key=lambda x: x.get('documentIndex', 0)
-       )
-   # ===============================================
-   # Return the full list of results, as generated by fetch_mcqs
-   return jsonify(results)
-
+    if results and results[0].get('metadata', {}).get('mcqs'):
+        mcqs_list = results[0]['metadata']['mcqs']
+        # Sort by the 'documentIndex' field.
+        # Fall back to 0 if the index is missing, though it shouldn't be.
+        results[0]['metadata']['mcqs'] = sorted(
+            mcqs_list,
+            key=lambda x: x.get('documentIndex', 0)
+        )
+    # ===============================================
+    # Return the full list of results, as generated by fetch_mcqs
+    return jsonify(results)
 
 
 @app.route("/generate_test", methods=["POST"])
@@ -322,7 +322,6 @@ def generate_test():
 
     mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
 
-  
     # The list mcqs_data is now in the final, random order for the test.
 
     # 2. ASSIGN NEW SEQUENTIAL INDEX (testIndex)
@@ -347,7 +346,6 @@ def generate_test():
         "createdAt": createdAt,
         "questions": final_mcqs_for_storage  # Return the indexed list
     }), 200
-
 
 
 @app.route("/combined_paperset", methods=["POST"])
@@ -398,15 +396,12 @@ def combined_test():
     if not all_mcqs:
         return jsonify({"message": "No MCQs found for the provided IDs"}), 200
 
-
     # Assign a new, sequential index (testIndex) to each question
     final_mcqs_for_storage = []
     for i, mcq in enumerate(all_mcqs):
         # Assign a sequential index starting from 1
         mcq['testIndex'] = i + 1
         final_mcqs_for_storage.append(mcq)
-
-
 
     # Generate test metadata
     testId = str(uuid.uuid4())
@@ -434,20 +429,22 @@ def testId(testId):
     test_data = fetch_test_by_testId(testId)
     if not test_data:
         return jsonify({"error": "Test  not found"}), 200
+    for q in test_data.get("questions", []):
+        q.pop("answer", None)
+
     return jsonify(test_data), 200
 
 
 @app.route("/paper_sets_by_user/<userId>", methods=["GET"])
 def test_history_by_userId(userId):
-    """
-    API to fetch a list of test sessions for a given user, including all details.
-    """
     test_history = test_sessions_by_userId(userId)
-    if test_history is None:
-        return jsonify({"error": "An error occurred while fetching test history"}), 500
-
     if not test_history:
-        return jsonify({"message": "No test sessions found for this user"}), 200
+        return jsonify({"message": "No test sessions found"}), 200
+
+    # remove answers before sending to frontend
+    for test in test_history:
+        for q in test.get("questions", []):
+            q.pop("answer", None)  # removes if present
 
     return jsonify(test_history), 200
 
@@ -455,68 +452,87 @@ def test_history_by_userId(userId):
 @app.route("/submit_test", methods=["POST"])
 def submit_test():
     """
-    API to submit student answers, calculate score percentage,
-    and store submission data for future analysis.
+    API to submit student answers, check correctness,
+    calculate score, and store submission data.
+    Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
     """
-    payload = request.get_json(silent=True) or {}
-    answers = payload.get("answers")
-    userId = payload.get("userId")
-    testId = payload.get("testId")
-    testTitle = payload.get("testTitle")
-    timeSpent = payload.get("timeSpent")
-    totalTime = payload.get("totalTime")
-    totalQuestions = payload.get("totalQuestions")
-    submittedAt = datetime.now().isoformat()
+    data = request.get_json(silent=True) or {}
 
-    # ✅ Validation
-    if not all([userId, testId, answers, submittedAt]):
+    userId = data.get("userId")
+    testId = data.get("testId")
+    testTitle = data.get("testTitle")
+    timeSpent = data.get("timeSpent")
+    totalTime = data.get("totalTime")
+    answers = data.get("answers")
+
+    if not all([userId, testId, answers]):
         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
-
     if not isinstance(answers, list):
         return jsonify({"error": "Answers must be a list"}), 400
 
+    submittedAt = datetime.now().isoformat()
+
+    # 🧠 Fetch original test data (includes correct answers)
+    test_data = fetch_test_by_testId(testId)
+    if not test_data:
+        return jsonify({"error": "Test not found"}), 404
+
+    questions = test_data.get("questions", [])
+    if isinstance(questions, str):
+        try:
+            questions = json.loads(questions)
+        except Exception:
+            questions = []
+
+    # Build quick lookup of correct answers
+    correct_map = {q.get("questionId"): q.get("answer") for q in questions}
+
+    totalQuestions = len(correct_map)
     total_correct = 0
-    detailed_results = []
+    results = []
 
-    # ✅ Loop through answers
-    for item in answers:
-        question = item.get("question")
-        submitted_answer = item.get("your_answer")
-        correct_answer = item.get("correct_answer")
+    # ✅ Compare each submitted answer
+    for ans in answers:
+        qid = ans.get("questionId")
+        qtext = ans.get("question")
+        user_ans = ans.get("your_answer")
 
-        if question and submitted_answer and correct_answer:
-            is_correct = (submitted_answer == correct_answer)
-            if is_correct:
-                total_correct += 1
+        # Try to get correct answer using questionId first, then question text
+        correct_ans = None
+        if qid and qid in correct_map:
+            correct_ans = correct_map.get(qid)
+        elif qtext:
+            for q in questions:
+                if qtext.strip().lower() == q.get("question", "").strip().lower():
+                    correct_ans = q.get("answer")
+                    qid = q.get("questionId")
+                    break
 
-            detailed_results.append(OrderedDict([
-                ("question", question),
-                ("your_answer", submitted_answer),
-                ("correct_answer", correct_answer),
-                ("is_correct", is_correct)
-            ]))
-        else:
-            detailed_results.append(OrderedDict([
-                ("question", question or "N/A"),
-                ("error", "Missing required fields")
-            ]))
+        is_correct = (user_ans == correct_ans)
 
-    # ✅ Calculate percentage
-    if totalQuestions and int(totalQuestions) > 0:
-        percentage = round((total_correct / int(totalQuestions)) * 100, 2)
-    else:
-        percentage = 0.0
+        if is_correct:
+            total_correct += 1
 
-    # ✅ Store results
-    is_stored,attemptId = store_submitted_test(
+        results.append(OrderedDict([
+            ("questionId", qid),
+            ("your_answer", user_ans),
+            ("correct_answer", correct_ans),
+            ("is_correct", is_correct)
+        ]))
+
+    # 🧮 Calculate score
+    score = round((total_correct / totalQuestions) * 100, 2) if totalQuestions > 0 else 0.0
+
+    # 💾 Store submission attempt in Qdrant or DB
+    is_stored, attemptId = store_submitted_test(
         userId=userId,
         testId=testId,
         testTitle=testTitle,
         timeSpent=timeSpent,
         totalTime=totalTime,
         submittedAt=submittedAt,
-        detailed_results=detailed_results,
-        score=percentage,  # score same as total_correct
+        detailed_results=results,
+        score=score,
         total_questions=totalQuestions,
         total_correct=total_correct
     )
@@ -524,18 +540,18 @@ def submit_test():
     if not is_stored:
         return jsonify({"error": "Failed to store submission"}), 500
 
-    # ✅ Response
+    # 📦 Final response
     response = OrderedDict([
-        ("total_questions", totalQuestions),
-        ("total_correct", total_correct),
-        ("score", percentage),
-        ("testTitle", testTitle),
-        ("submittedAt", submittedAt),
+        ("attemptId", attemptId),
         ("userId", userId),
         ("testId", testId),
+        ("testTitle", testTitle),
+        ("submittedAt", submittedAt),
         ("timeSpent", timeSpent),
-        ("detailed_results", detailed_results),
-        ("attemptId",attemptId)
+        ("total_questions", totalQuestions),
+        ("total_correct", total_correct),
+        ("score", score),
+        ("detailed_results", results)
     ])
 
     return jsonify(response)
@@ -573,7 +589,6 @@ def get_single_submitted_test(testId):
         return jsonify({"message": "No submitted test found"}), 404
 
     return jsonify(result), 200
-
 
 
 @app.route("/question_bank/<generatedQAId>", methods=["PUT"])
@@ -671,19 +686,28 @@ def edit_question_bank(generatedQAId):
             "generatedQAId_used": generatedQAId
         }), 404
 
-    updated_questions_count = len(
-        updated_data[0].get("metadata", {}).get("mcqs", [])
-    )
+        # ✅ --- Step 5: Compute answerFound flag ---
+    mcqs = updated_data[0]["metadata"].get("mcqs", [])
+    all_have_answers = True
+    for q in mcqs:
+        ans = q.get("answer")
+        if not (ans and str(ans).strip()):
+            all_have_answers = False
+            break
 
-    # --- Step 5: Return Success Response ---
+    # ✅ --- Step 6: Update Qdrant MCQ bank with answerFound flag ---
+    update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
+
+    updated_questions_count = len(mcqs)
+
+    # ✅ --- Step 7: Return Success Response ---
     return jsonify({
         "message": "Question bank updated successfully",
         "title_updated": metadata_update_status.get("title_updated", False),
         "description_updated": metadata_update_status.get("description_updated", False),
-        "updated_questions_count": updated_questions_count
+        "updated_questions_count": updated_questions_count,
+        "answerFound": all_have_answers
     }), 200
-
-
 
 
 @app.route("/create_manual_question_bank", methods=["POST"])
@@ -716,7 +740,8 @@ def create_manual_question_bank():
 
         # NOTE: If your database requires questionId/documentIndex, they must be set here.
         # However, we will assume 'store_mcqs_for_manual_creation' handles questionId and documentIndex assignment.
-        mcq['documentIndex'] = i  # Assign sequential index
+        mcq['documentIndex'] = i
+        mcq['questionId'] = str(uuid.uuid4())
         indexed_mcqs.append(mcq)
 
     # 2. Store Metadata and Questions (using a modified store function)
@@ -739,7 +764,6 @@ def create_manual_question_bank():
         "title": title,
         "questions_count": len(indexed_mcqs)
     }), 201
-
 
 
 @app.route("/question_bank/<generatedQAId>", methods=["DELETE"])
@@ -765,7 +789,6 @@ def delete_question_bank(generatedQAId):
         }), 200
 
 
-
 @app.route("/submitted_test/<testId>", methods=["DELETE"])
 def delete_submitted_test(testId):
     """
@@ -784,8 +807,6 @@ def delete_submitted_test(testId):
         return jsonify({
             "error": f"Failed to delete submitted test result '{testId}'. It may not exist."
         }), 404
-
-
 
 
 @app.route("/paper_sets/<testId>", methods=["DELETE"])
@@ -829,49 +850,69 @@ def delete_submitted_test_attempt_api(attemptId):
 @app.route("/paper_sets/<testId>", methods=["PUT"])
 def edit_paperset(testId):
     """
-    Unified API to edit an existing test session's metadata (e.g., totalTime, title)
-    or its list of questions.
-
-    Payload should contain the specific fields to update (e.g., {"testTitle": "New Title"}).
-    If updating questions, the payload must contain the full, new 'questions' list.
+    Update specific fields of a test session.
+    Allows partial updates for test metadata and individual questions.
     """
     payload = request.get_json(silent=True) or {}
 
     if not testId:
         return jsonify({"error": "testId is required"}), 400
 
-    # 1. Fetch the existing test session record
+    # 1️⃣ Fetch existing test session
     existing_record = fetch_test_by_testId(testId)
     if not existing_record:
-        return jsonify({"error": f"Test session with ID '{testId}' not found."}), 404
+        return jsonify({"error": f"Test session '{testId}' not found"}), 404
 
-    # 2. Merge existing data with new payload
-    # Note: We must update the 'questions' list if provided in the payload
     updated_data = existing_record.copy()
 
-    # Remove the existing 'testId' from metadata to avoid redundancy if it was there
-    if 'testId' in updated_data:
-        del updated_data['testId']
+    # 2️⃣ Update top-level fields
+    if "testTitle" in payload:
+        updated_data["testTitle"] = payload["testTitle"]
 
-        # Merge the payload into the existing record
-    for key, value in payload.items():
-        if key in ['testTitle', 'totalTime', 'questions']:  # Keys we allow to be updated
-            updated_data[key] = value
+    if "totalTime" in payload:
+        updated_data["totalTime"] = payload["totalTime"]
 
-    # 3. Call the helper function to perform the ChromaDB update
-    # The helper function must handle re-stringifying the 'questions' list if needed.
+    # 3️⃣ Partial update for questions
+    if "questions" in payload and isinstance(payload["questions"], list):
+        new_questions = payload["questions"]
+        existing_questions = updated_data.get("questions", [])
+
+        # Create a mapping for easier lookup by questionId
+        existing_by_id = {q["questionId"]: q for q in existing_questions}
+
+        for new_q in new_questions:
+            qid = new_q.get("questionId")
+            if not qid:
+                continue  # skip invalid question
+
+            # If exists, merge updates; otherwise add new question
+            if qid in existing_by_id:
+                existing_q = existing_by_id[qid]
+                for key, value in new_q.items():
+                    existing_q[key] = value  # overwrite only the provided keys
+            else:
+                # assign default fields if adding a new one
+                new_q.setdefault("documentIndex", len(existing_questions))
+                new_q.setdefault("generatedQAId", updated_data.get("generatedQAId"))
+                new_q.setdefault("testIndex", len(existing_questions) + 1)
+                new_q.setdefault("userId", updated_data.get("userId"))
+                new_q.setdefault("image", None)
+                new_q.setdefault("noise", "")
+                existing_questions.append(new_q)
+
+        updated_data["questions"] = list(existing_by_id.values())
+
+    # 4️⃣ Save back to Qdrant
     success = update_test_session(testId, updated_data)
 
     if success:
         return jsonify({
             "message": "Test session updated successfully",
             "testId": testId,
-            "updated_data_keys": list(payload.keys())
+            "updated_fields": list(payload.keys())
         }), 200
     else:
-        return jsonify({"error": "Failed to update test session in database."}), 500
-
-
+        return jsonify({"error": "Failed to update test session"}), 500
 
 
 if __name__ == '__main__':
