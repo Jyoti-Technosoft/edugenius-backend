@@ -1,2 +1,4 @@
 CRF_BERT_MODEL/model.pt
 reference.json
+__pycache__/
+.env

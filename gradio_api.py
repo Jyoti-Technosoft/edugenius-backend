@@ -91,12 +91,13 @@ def call_layoutlm_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
 
     load_env()
     hf_space = os.environ.get("HF_SPACE")
+    hf_token = os.environ.get("HF_SPACE_TOKEN")
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
 
     print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
     try:
-        client = Client(hf_space)
+        client = Client(hf_space,hf_token=hf_token)
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
