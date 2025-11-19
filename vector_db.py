@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import  Dict, Any,Optional
 from drive_uploader import load_env
 import numpy as np
-
+from typing import Dict, Any, List, Optional, Tuple
 from qdrant_client import QdrantClient, models
 load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
@@ -198,6 +198,37 @@ def split_multi_answers(s: str) -> list:
         return []
     return [p.strip() for p in re.split(r'[,;/\n]+', s) if p.strip()]
 
+
+
+
+
+def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """
+    Scans the MCQ dictionary for dynamically named Base64 fields (equationNN, figureNN),
+    and separates them from the rest of the metadata.
+
+    Returns:
+        1. Consolidated dictionary of {field_name: base64_string}
+        2. The cleaned MCQ dictionary without those fields.
+    """
+    image_fields = {}
+    cleaned_mcq = {}
+
+    # Regex to identify dynamic image/equation fields
+    # Matches keys starting with 'equation' or 'figure' followed by one or more digits
+    image_pattern = re.compile(r'^(equation|figure)\d+$', re.IGNORECASE)
+
+    for key, value in mcq.items():
+        if isinstance(value, str) and image_pattern.match(key):
+            # Key is like 'equation56', value is the base64 string
+            image_fields[key] = value
+        else:
+            # All other fields (question, options, answer, documentIndex, etc.) are kept
+            cleaned_mcq[key] = value
+
+    return image_fields, cleaned_mcq
+
+
 # --- MAIN FUNCTION ---
 def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     userIdClean = str(userId).strip().lower()
@@ -220,6 +251,8 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
 
     for i, mcq in enumerate(mcqs):
         mcq = clean_mcq_text(mcq)  # ✅ clean "Correct" etc.
+        image_fields, mcq_cleaned = get_image_data(mcq)
+        images_base64_json = json.dumps(image_fields)
 
         raw_answer = mcq.get("answer", "")
         normalized = normalize_text(raw_answer)
@@ -257,10 +290,10 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("userId", userIdClean),
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
-            ("image", mcq.get("image")),
             ("passage", mcq.get("passage") or ""),
             ("options", json.dumps(mcq.get("options", {}))),
             ("answer", canonical_answer),  # ✅ only one field, format "(A)"
+            ("images_base64", images_base64_json),
             ("documentIndex", i)
         ])
 
@@ -345,7 +378,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
                 ("answer", payload.get("answer")),
                 ("passage", payload.get("passage") or ""),
                 ("noise", payload.get("noise")),
-                ("image", payload.get("image")),
+                ("images_base64", payload.get("images_base64")),
                 ("documentIndex", payload.get("documentIndex")),
             ])
             mcq_list.append(ordered_mcq)
@@ -881,12 +914,38 @@ def delete_test_session_by_id(testId):
         return False
 def delete_submitted_test_by_id(testId):
     try:
-        client.delete(
-            collection_name=COLLECTION_SUBMITTED,
-            points_selector=models.PointIdsList(
-                points=[testId]
-            )
+        # 1️⃣ Build filter to match testId
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="testId",
+                    match=models.MatchValue(value=testId)
+                )
+            ]
         )
+        # 2️⃣ Find all attempts with this testId
+        dummy_vector = [0.0] * VECTOR_DIM
+        hits = client.search(
+            collection_name=COLLECTION_SUBMITTED,
+            query_vector=dummy_vector,
+            query_filter=filt,
+            limit=2000,
+            with_payload=False
+        )
+        if not hits:
+            print(f"[INFO] No submitted test attempts found for testId={testId}")
+        else:
+            # 3️⃣ Collect attempt IDs
+            attempt_ids = [_extract_id(h) for h in hits]
+            attempt_ids = [x for x in attempt_ids if x]
+
+            if attempt_ids:
+                # 4️⃣ Delete points
+                client.delete(
+                    collection_name=COLLECTION_SUBMITTED,
+                    points_selector=attempt_ids
+                )
+                print(f"[INFO] Deleted {len(attempt_ids)} submitted attempts for testId={testId}")
         return True
     except Exception as e:
         print("delete_submitted_test_by_id error:", e)

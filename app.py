@@ -8,7 +8,8 @@ import os
 import json
 from datetime import datetime
 import random
-from gradio_api import call_layoutlm_api
+# from gradio_api import call_layoutlm_api
+from gradio_api import call_yolo_api
 
 """
 ===========================================================
@@ -140,7 +141,8 @@ def upload_pdf():
 
     # 3. Directly call model
     print("[STEP] Calling LayoutLM model directly (no Drive)...")
-    final_data = call_layoutlm_api(pdf_bytes, pdf_name)
+    # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
+    final_data = call_yolo_api(pdf_bytes, pdf_name)
     print(f"[SUCCESS] LayoutLM returned {len(final_data)} MCQs")
 
     # 4. Add index to MCQs
@@ -202,7 +204,7 @@ def upload_image():
         # 3. Directly call model for each image
         print(f"[STEP] Calling LayoutLM model for {filename} ...")
         try:
-            result = call_layoutlm_api(file_bytes, filename)
+            result = call_yolo_api(file_bytes, filename)
             print(f"[SUCCESS] Model returned result for {filename}")
             if isinstance(result, list):
                 all_results.extend(result)
@@ -865,44 +867,65 @@ def edit_paperset(testId):
 
     updated_data = existing_record.copy()
 
-    # 2️⃣ Update top-level fields
-    if "testTitle" in payload:
-        updated_data["testTitle"] = payload["testTitle"]
+    # Extract fields
+    edits = payload.get("edits", [])
+    new_title = payload.get("testTitle")
+    new_total_time = payload.get("totalTime")
 
-    if "totalTime" in payload:
-        updated_data["totalTime"] = payload["totalTime"]
+    # --- Step 2: Update Top-Level Fields ---
+    if new_title is not None:
+        updated_data["testTitle"] = new_title
 
-    # 3️⃣ Partial update for questions
-    if "questions" in payload and isinstance(payload["questions"], list):
-        new_questions = payload["questions"]
-        existing_questions = updated_data.get("questions", [])
+    if new_total_time is not None:
+        updated_data["totalTime"] = new_total_time
 
-        # Create a mapping for easier lookup by questionId
-        existing_by_id = {q["questionId"]: q for q in existing_questions}
+    # --- Step 3: Question Operations ---
+    existing_questions = {q["questionId"]: q for q in updated_data.get("questions", [])}
 
-        for new_q in new_questions:
-            qid = new_q.get("questionId")
+    for edit in edits:
+        operation = edit.get("operation")
+        data = edit.get("data")
+
+        if not operation or not data:
+            continue
+
+        # ---------- ADD ----------
+        if operation == "add":
+            qid = data.get("questionId")
             if not qid:
-                continue  # skip invalid question
+                continue
 
-            # If exists, merge updates; otherwise add new question
-            if qid in existing_by_id:
-                existing_q = existing_by_id[qid]
-                for key, value in new_q.items():
-                    existing_q[key] = value  # overwrite only the provided keys
-            else:
-                # assign default fields if adding a new one
-                new_q.setdefault("documentIndex", len(existing_questions))
-                new_q.setdefault("generatedQAId", updated_data.get("generatedQAId"))
-                new_q.setdefault("testIndex", len(existing_questions) + 1)
-                new_q.setdefault("userId", updated_data.get("userId"))
-                new_q.setdefault("image", None)
-                new_q.setdefault("noise", "")
-                existing_questions.append(new_q)
+            # Set default fields for new question
+            data.setdefault("documentIndex", len(existing_questions))
+            data.setdefault("testIndex", len(existing_questions) + 1)
+            data.setdefault("userId", updated_data.get("userId"))
+            data.setdefault("generatedQAId", updated_data.get("generatedQAId"))
+            data.setdefault("passage", "")
+            data.setdefault("image", None)
+            data.setdefault("noise", "")
 
-        updated_data["questions"] = list(existing_by_id.values())
+            existing_questions[qid] = data
 
-    # 4️⃣ Save back to Qdrant
+        # ---------- EDIT ----------
+        elif operation == "edit":
+            qid = data.get("questionId")
+            if qid and qid in existing_questions:
+                for key, value in data.items():
+                    existing_questions[qid][key] = value
+
+        # ---------- DELETE ----------
+        elif operation == "delete":
+            qid = data.get("questionId")
+            if qid in existing_questions:
+                del existing_questions[qid]
+
+    # Sort after update
+    updated_data["questions"] = sorted(
+        list(existing_questions.values()),
+        key=lambda q: q.get("documentIndex", 999999)
+    )
+
+    # --- Step 4: Save back ---
     success = update_test_session(testId, updated_data)
 
     if success:
