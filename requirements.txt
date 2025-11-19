@@ -4,4 +4,4 @@ gunicorn
 gradio_client
 numpy
 werkzeug
-qdrant-client
+qdrant-client== 1.15.1
