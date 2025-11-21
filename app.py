@@ -266,7 +266,7 @@ def get_question_banks_by_user():
         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
         mimetype="application/json"
     )
-@app.route("gi/<generatedQAId>", methods=["GET"])
+@app.route("/question-banks/<generatedQAId>", methods=["GET"])
 def get_question_bank_by_id(generatedQAId):
 
     if not generatedQAId:
