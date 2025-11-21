@@ -117,7 +117,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 #
 # ===============================
 
-@app.route("/create_question_bank", methods=["POST"])
+@app.route("/question-banks/upload", methods=["POST"])
 def upload_pdf():
     print("\n[START] /create_question_bank request received")
 
@@ -176,7 +176,7 @@ def upload_pdf():
     )
 
 
-@app.route("/create_question_bank_image", methods=["POST"])
+@app.route("/question-banks/upload/images", methods=["POST"])
 def upload_image():
     print("\n[START] /create_question_bank request received")
 
@@ -237,10 +237,12 @@ def upload_image():
         }, ensure_ascii=False),
         mimetype="application/json"
     )
-@app.route("/question_bank_by_user", methods=["POST"])
-def paper_sets_by_userID():
-    data = request.get_json(silent=True) or request.form.to_dict()
-    userId = data.get("userId")
+@app.route("/question-banks", methods=["GET"])
+def get_question_banks_by_user():
+    userId = request.args.get("userId")  # ✅ GET query params
+
+    if not userId:
+        return jsonify({"error": "userId is required"}), 400
 
     mcqs_data = fetch_mcqs(userId=userId)
     if not mcqs_data:
@@ -264,10 +266,8 @@ def paper_sets_by_userID():
         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
         mimetype="application/json"
     )
-@app.route("/question_bank_by_id", methods=["POST"])
-def paper_sets_by_generatedQAId():
-    data = request.get_json(silent=True) or request.form.to_dict()
-    generatedQAId = data.get("generatedQAId")
+@app.route("gi/<generatedQAId>", methods=["GET"])
+def get_question_bank_by_id(generatedQAId):
 
     if not generatedQAId:
         return jsonify({"error": "generatedQAId is required"}), 400
@@ -290,7 +290,7 @@ def paper_sets_by_generatedQAId():
     return jsonify(results)
 
 
-@app.route("/generate_test", methods=["POST"])
+@app.route("/tests", methods=["POST"])
 def generate_test():
     """
     API to fetch MCQs by generated-qa-Id and marks (limit),
@@ -350,7 +350,7 @@ def generate_test():
     }), 200
 
 
-@app.route("/combined_paperset", methods=["POST"])
+@app.route("/tests/combined", methods=["POST"])
 def combined_test():
     data = request.get_json(silent=True) or request.form
 
@@ -422,7 +422,7 @@ def combined_test():
     }), 200
 
 
-@app.route("/paper_set/<testId>", methods=["GET"])
+@app.route("/tests/<testId>", methods=["GET"])
 def testId(testId):
     """
 
@@ -437,7 +437,7 @@ def testId(testId):
     return jsonify(test_data), 200
 
 
-@app.route("/paper_sets_by_user/<userId>", methods=["GET"])
+@app.route("/paper-sets/user/<userId>", methods=["GET"])
 def test_history_by_userId(userId):
     test_history = test_sessions_by_userId(userId)
     if not test_history:
@@ -451,7 +451,7 @@ def test_history_by_userId(userId):
     return jsonify(test_history), 200
 
 
-@app.route("/submit_test", methods=["POST"])
+@app.route("/tests/submit", methods=["POST"])
 def submit_test():
     """
     API to submit student answers, check correctness,
@@ -558,7 +558,7 @@ def submit_test():
 
     return jsonify(response)
 
-@app.route("/submitted_tests/<userId>", methods=["GET"])
+@app.route("/tests/submitted/user/<userId>", methods=["GET"])
 def submitted_tests_history(userId):
     """
     API to fetch a list of all submitted test sessions for a given user.
@@ -577,7 +577,7 @@ def submitted_tests_history(userId):
     return jsonify(submitted_tests), 200
 
 
-@app.route("/submitted_test/<testId>", methods=["GET"])
+@app.route("/tests/submitted/<testId>", methods=["GET"])
 def get_single_submitted_test(testId):
     """
     Fetch details of one submitted test by testId.
@@ -593,7 +593,7 @@ def get_single_submitted_test(testId):
     return jsonify(result), 200
 
 
-@app.route("/question_bank/<generatedQAId>", methods=["PUT"])
+@app.route("/question-banks/<generatedQAId>", methods=["PUT"])
 def edit_question_bank(generatedQAId):
     """
     Unified API to perform add, edit, or delete operations on questions,
@@ -712,7 +712,7 @@ def edit_question_bank(generatedQAId):
     }), 200
 
 
-@app.route("/create_manual_question_bank", methods=["POST"])
+@app.route("/question-banks/manual", methods=["POST"])
 def create_manual_question_bank():
     """
     API to create a new question bank and populate it with a list of questions
@@ -768,7 +768,7 @@ def create_manual_question_bank():
     }), 201
 
 
-@app.route("/question_bank/<generatedQAId>", methods=["DELETE"])
+@app.route("/question-banks/<generatedQAId>", methods=["DELETE"])
 def delete_question_bank(generatedQAId):
     """
     API to delete an entire question bank (metadata and all associated questions).
@@ -791,7 +791,7 @@ def delete_question_bank(generatedQAId):
         }), 200
 
 
-@app.route("/submitted_test/<testId>", methods=["DELETE"])
+@app.route("/tests/submitted/<testId>", methods=["DELETE"])
 def delete_submitted_test(testId):
     """
     API to delete a specific submitted test session result by its ID.
@@ -811,7 +811,7 @@ def delete_submitted_test(testId):
         }), 404
 
 
-@app.route("/paper_sets/<testId>", methods=["DELETE"])
+@app.route("/paper-sets/<testId>", methods=["DELETE"])
 def delete_test_session(testId):
     """
     API to delete a specific test session by its ID.
@@ -832,7 +832,7 @@ def delete_test_session(testId):
         }), 200
 
 
-@app.route("/test_attempt/<attemptId>", methods=["DELETE"])
+@app.route("/test-attempts/<attemptId>", methods=["DELETE"])
 def delete_submitted_test_attempt_api(attemptId):
     """
     API to delete a specific submitted test attempt by attemptId.
@@ -849,7 +849,7 @@ def delete_submitted_test_attempt_api(attemptId):
     }), 200
 
 
-@app.route("/paper_sets/<testId>", methods=["PUT"])
+@app.route("/paper-sets/<testId>", methods=["PUT"])
 def edit_paperset(testId):
     """
     Update specific fields of a test session.
