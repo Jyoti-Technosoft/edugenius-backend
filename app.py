@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 import random
 # from gradio_api import call_layoutlm_api
-from gradio_api import call_yolo_api
+from gradio_api import call_yolo_api,latex_model
 
 """
 ===========================================================
@@ -119,7 +119,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route("/question-banks/upload", methods=["POST"])
 def upload_pdf():
-    print("\n[START] /create_question_bank request received")
+    print(f"\n[START] /create_question_bank request received")
 
     # 1. Validate inputs
     user_id = request.form.get("userId")
@@ -142,8 +142,12 @@ def upload_pdf():
     # 3. Directly call model
     print("[STEP] Calling LayoutLM model directly (no Drive)...")
     # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
-    final_data = call_yolo_api(pdf_bytes, pdf_name)
-    print(f"[SUCCESS] LayoutLM returned {len(final_data)} MCQs")
+    try:
+        final_data = latex_model(pdf_bytes, pdf_name)
+    except Exception as e:
+        print("[ERROR] latex_model failed → switching to YOLO model")
+        print("Reason:", e)
+        final_data = call_yolo_api(pdf_bytes, pdf_name)
 
     # 4. Add index to MCQs
     indexed_mcqs = [

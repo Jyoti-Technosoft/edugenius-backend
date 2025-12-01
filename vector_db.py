@@ -14,7 +14,7 @@ QDRANT_URL =os.environ.get("QDRANT_URL")  # change to your cluster URL
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
 VECTOR_DIM = 384
 DISTANCE = models.Distance.COSINE
-TIMEOUT = 60.0
+TIMEOUT = 100.0
 
 COLLECTION_MCQ = "mcq_collection"
 COLLECTION_QUESTIONS = "questions_collection"

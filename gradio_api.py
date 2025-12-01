@@ -160,6 +160,77 @@ def call_yolo_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
 
     load_env()
     hf_space = os.environ.get("HF_SPACE")
+    hf_token = os.environ.get("HF_SPACE_TOKEN")
+
+    if not hf_space:
+        raise RuntimeError("HF_SPACE not found in .env")
+
+    print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
+    try:
+        client = Client(hf_space,hf_token=hf_token)
+    except Exception as e:
+        raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
+
+    # ✅ detect correct extension
+    ext = os.path.splitext(filename)[-1].lower()
+
+    # ✅ create temp file with same extension
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
+    print(f"[STEP] Sending {filename} ({ext}) to LayoutLM model...")
+
+    structured_input_list = {
+        "_type": "gradio.FileData",
+        "path": tmp_path,
+        "meta": {
+            "_type": "gradio.FileData"
+        }
+    }
+
+    try:
+        response = client.predict(structured_input_list, api_name="/process_document")
+    except Exception as e:
+        raise ValueError(f"LayoutLM API call failed: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
+
+    # ✅ Normalize response
+    if isinstance(response, (dict, list)):
+        return response
+
+    if isinstance(response, tuple):
+        for item in response:
+            if isinstance(item, (dict, list)):
+                return item
+            if isinstance(item, str):
+                try:
+                    return json.loads(item)
+                except json.JSONDecodeError:
+                    continue
+        return {"raw_output": response}
+
+    if isinstance(response, str):
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return {"raw_output": response}
+
+    return {"raw_output": response}
+
+def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """
+    Send an in-memory PDF or image directly to the Hugging Face model (no Drive upload).
+    Supports .pdf, .png, .jpg, .jpeg automatically.
+    """
+    import mimetypes
+
+    load_env()
+    hf_space = os.environ.get("HF_SPACE_LATEX")
 
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
