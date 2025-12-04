@@ -24,7 +24,15 @@ COLLECTION_SUBMITTED = "submitted_tests_collection"
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 
 def ensure_collections():
-    existing = [c.name for c in client.get_collections().collections]
+    try:
+        # Try to connect and fetch existing collections
+        colls = client.get_collections().collections
+        existing = [c.name for c in colls]
+    except Exception as e:
+        print("\n[ERROR] Could NOT connect to Qdrant Cloud during ensure_collections()")
+        print("Reason:", str(e))
+        print("Skipping collection creation to avoid crashing the backend.\n")
+        return  # ← Do NOT crash app
 
     vector_params = models.VectorParams(size=VECTOR_DIM, distance=DISTANCE)
 
@@ -296,7 +304,18 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
         # 🟢 CHANGE 2: Merge the image fields directly into the payload
         # This unpacks {"equation77": "...", "equation79": "..."} into the dictionary
         q_meta.update(image_fields)
+        pred_sub = mcq.get("predicted_subject", {})
+        pred_con = mcq.get("predicted_concept", {})
 
+        q_meta["predicted_subject"] = OrderedDict([
+            ("label", pred_sub.get("label", "")),
+            ("confidence", pred_sub.get("confidence", 0))
+        ])
+
+        q_meta["predicted_concept"] = OrderedDict([
+            ("label", pred_con.get("label", "")),
+            ("confidence", pred_con.get("confidence", 0))
+        ])
         # --- Vector & Point Creation (Embedding still done per question) ---
         q_vec = embed(mcq.get("question", "") or "")[0]
         point = models.PointStruct(
@@ -371,7 +390,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
             # Define the standard fields we expect to be ordered
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
-                "options", "answer", "passage", "noise", "documentIndex"
+                "options", "answer", "passage", "noise", "documentIndex","predicted_subject","predicted_concept"
             ]
 
             # Create the ordered dictionary for the standard fields
