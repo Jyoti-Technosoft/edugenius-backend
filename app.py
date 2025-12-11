@@ -1,7 +1,7 @@
 import uuid
 from collections import Counter
 import pickle
-from typing import Tuple
+from typing import Dict, Any, Tuple, List
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import os
@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 import random
 # from gradio_api import call_layoutlm_api
-from gradio_api import call_yolo_api,latex_model
+from gradio_api import call_yolo_api,latex_model, call_feeedback_api
 
 """
 ===========================================================
@@ -143,6 +143,7 @@ def upload_pdf():
     print("[STEP] Calling LayoutLM model directly (no Drive)...")
     # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
     try:
+
         final_data = latex_model(pdf_bytes, pdf_name)
     except Exception as e:
         print("[ERROR] latex_model failed → switching to YOLO model")
@@ -178,6 +179,105 @@ def upload_pdf():
         }, ensure_ascii=False),
         mimetype="application/json"
     )
+
+
+#
+#
+# @app.route("/document-analysis", methods=["POST"])
+# def analyze_pdf():
+#     print(f"\n[START] /document-analysis request received")
+#
+#     # 1. Validate inputs
+#     pdf_file = request.files.get("pdf")
+#     if not pdf_file:
+#         return jsonify({"error": "PDF file not provided"}), 400
+#
+#     # 2. Keep PDF in memory
+#     print("[STEP] Reading PDF into memory...")
+#     pdf_bytes = pdf_file.read()
+#     pdf_name = secure_filename(pdf_file.filename)
+#
+#     # 3. Call Feedback API for analysis
+#     print("[STEP] Calling feedback model for document analysis...")
+#
+#     total_pages = 0
+#     total_equations = 0
+#
+#     try:
+#         # Call the function with in-memory bytes and filename
+#         feedback_data: Dict[str, Any] = call_feeedback_api(pdf_bytes, pdf_name)
+#
+#         # Safely extract the returned values
+#         total_pages = feedback_data.get('Total Pages in PDF', 0)
+#         total_equations = feedback_data.get('Total Equations Detected', 0)
+#
+#         print(f"[INFO] Analysis results: Pages={total_pages}, Equations={total_equations}")
+#
+#         # 4. Return the analysis data immediately
+#         print("[END] Analysis request complete\n")
+#         return jsonify({
+#             "status": "success",
+#             "totalPages": total_pages,
+#             "totalEquations": total_equations,
+#             "fileName": pdf_name  # Include filename for continuity
+#         })
+#
+#     except Exception as e:
+#         print(f"[ERROR] call_feeedback_api failed: {e}")
+#         return jsonify({"error": f"Document analysis failed: {e}"}), 500
+#
+
+
+@app.route("/document-analysis", methods=["POST"])
+def analyze_pdf():
+    print(f"\n[START] /document-analysis request received")
+
+    # 1. Validate inputs
+    pdf_file = request.files.get("pdf")
+    if not pdf_file:
+        return jsonify({"error": "PDF file not provided"}), 400
+
+    # 2. Keep PDF in memory
+    print("[STEP] Reading PDF into memory...")
+    pdf_bytes = pdf_file.read()
+    pdf_name = secure_filename(pdf_file.filename)
+
+    # 3. Call Feedback API for analysis
+    print("[STEP] Calling feedback model for document analysis...")
+
+    # Initialize variables, including the new dictionary
+    total_pages = 0
+    total_equations = 0
+    equation_counts_per_page = {}  # <-- NEW: Initialize the variable
+
+    try:
+        # Call the function with in-memory bytes and filename
+        feedback_data: Dict[str, Any] = call_feeedback_api(pdf_bytes, pdf_name)
+
+        # Safely extract the returned values
+        total_pages = feedback_data.get('Total Pages in PDF', 0)
+        total_equations = feedback_data.get('Total Equations Detected', 0)
+
+        # <-- CRITICAL FIX: Extract the new per-page data
+        equation_counts_per_page = feedback_data.get('Equation Counts Per Page', {})
+
+        print(f"[INFO] Analysis results: Pages={total_pages}, Equations={total_equations}")
+
+        # 4. Return the analysis data immediately
+        print("[END] Analysis request complete\n")
+        return jsonify({
+            "status": "success",
+            "totalPages": total_pages,
+            "totalEquations": total_equations,
+            "fileName": pdf_name,  # Include filename for continuity
+            # <-- CRITICAL FIX: Include the new data in the final JSON response
+            "equationCountsPerPage": equation_counts_per_page
+        })
+
+    except Exception as e:
+        print(f"[ERROR] call_feeedback_api failed: {e}")
+        return jsonify({"error": f"Document analysis failed: {e}"}), 500
+
 
 
 @app.route("/question-banks/upload/images", methods=["POST"])
