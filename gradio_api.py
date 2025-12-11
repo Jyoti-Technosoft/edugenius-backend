@@ -8,6 +8,7 @@ import json
 from typing import Dict, Any, Tuple
 from gradio_client import Client
 from drive_uploader import load_env
+import time
 
 
 
@@ -291,3 +292,194 @@ def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
             return {"raw_output": response}
 
     return {"raw_output": response}
+
+
+
+
+
+
+#
+# def call_feeedback_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+#     """
+#     Calls the heerjtdev/feeedback Hugging Face Space to analyze a PDF.
+#     It includes detailed time logs for debugging latency issues.
+#     """
+#     # Record start time for total execution
+#     start_time = time.time()
+#
+#     # load_env() # Uncomment if needed
+#     hf_space = "heerjtdev/feeedback"  # Space URL
+#
+#     print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
+#
+#     # 1. Initialize the client
+#     client_start = time.time()
+#     try:
+#         client = Client(hf_space)
+#         client_duration = time.time() - client_start
+#         print(f"[TIMELOG] Client Initialization took: {client_duration:.2f} seconds")
+#     except Exception as e:
+#         raise ConnectionError(f"Could not initialize connection to Hugging Face Space: {e}")
+#
+#     ext = os.path.splitext(filename)[-1].lower()
+#     tmp_path = None
+#
+#     try:
+#         # 2. Create temp file from in-memory bytes
+#         temp_file_start = time.time()
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+#             tmp.write(file_bytes)
+#             tmp_path = tmp.name
+#         temp_file_duration = time.time() - temp_file_start
+#         print(f"[TIMELOG] Temp File Creation took: {temp_file_duration:.2f} seconds")
+#
+#         print(f"[STEP] Processing temporary file: {tmp_path}...")
+#
+#         # Prepare the structured input dictionary (FileData)
+#         structured_file_input = {
+#             "path": tmp_path,
+#             "meta": {"_type": "gradio.FileData"}
+#         }
+#
+#         # 3. Call the prediction function (THE SLOW STEP: Cold Start + Model Run)
+#         api_call_start = time.time()
+#         response: Tuple[Any, ...] = client.predict(
+#             structured_file_input,
+#             api_name="/gradio_process_pdf"
+#         )
+#         api_call_duration = time.time() - api_call_start
+#         print(f"[TIMELOG] API Prediction Call took: {api_call_duration:.2f} seconds")
+#
+#         # 4. Parse the 5-item response (List/Tuple)
+#         if isinstance(response, (list, tuple)) and len(response) >= 3:
+#             num_pages_str = str(response[0])
+#             num_equations_str = str(response[1])
+#             num_figures_str = str(response[2])
+#
+#             # Map the results to the keys expected by your Flask route, converting to int
+#             final_result = {
+#                 "Total Pages in PDF": int(num_pages_str) if num_pages_str.isdigit() else num_pages_str,
+#                 "Total Equations Detected": int(
+#                     num_equations_str) if num_equations_str.isdigit() else num_equations_str,
+#                 "Total Figures Detected": int(num_figures_str) if num_figures_str.isdigit() else num_figures_str,
+#             }
+#
+#             total_duration = time.time() - start_time
+#             print(f"[TIMELOG] Total function execution took: {total_duration:.2f} seconds")
+#             return final_result
+#
+#         # Fallback for unexpected format
+#         total_duration = time.time() - start_time
+#         print(f"[TIMELOG] Total function execution took (failed): {total_duration:.2f} seconds")
+#         return {"raw_output": response, "error": "Unexpected output format from API. Expected a 5-item list."}
+#
+#     except Exception as e:
+#         # Re-raise exceptions as ValueError for API failure
+#         total_duration = time.time() - start_time
+#         print(f"[TIMELOG] Total function execution took (exception): {total_duration:.2f} seconds")
+#         raise ValueError(f"API call failed during prediction phase: {e}")
+#
+#     finally:
+#         # 5. Clean up the temporary file
+#         if tmp_path and os.path.exists(tmp_path):
+#             try:
+#                 os.remove(tmp_path)
+#             except Exception as e:
+#                 print(f"[WARN] Failed to delete temporary file {tmp_path}: {e}")
+
+
+def call_feeedback_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    """
+    Calls the heerjtdev/feeedback Hugging Face Space to analyze a PDF.
+    It now parses the six-item response, including the per-page equation counts.
+    """
+    # Record start time for total execution
+    start_time = time.time()
+
+    # load_env() # Uncomment if needed
+    hf_space = "heerjtdev/feeedback"  # Space URL
+
+    print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
+
+    # 1. Initialize the client
+    client_start = time.time()
+    try:
+        client = Client(hf_space)
+        client_duration = time.time() - client_start
+        print(f"[TIMELOG] Client Initialization took: {client_duration:.2f} seconds")
+    except Exception as e:
+        raise ConnectionError(f"Could not initialize connection to Hugging Face Space: {e}")
+
+    ext = os.path.splitext(filename)[-1].lower()
+    tmp_path = None
+
+    try:
+        # 2. Create temp file from in-memory bytes
+        temp_file_start = time.time()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        temp_file_duration = time.time() - temp_file_start
+        print(f"[TIMELOG] Temp File Creation took: {temp_file_duration:.2f} seconds")
+
+        print(f"[STEP] Processing temporary file: {tmp_path}...")
+
+        # Prepare the structured input dictionary (FileData)
+        structured_file_input = {
+            "path": tmp_path,
+            "meta": {"_type": "gradio.FileData"}
+        }
+
+        # 3. Call the prediction function (THE SLOW STEP: Cold Start + Model Run)
+        api_call_start = time.time()
+        # Expecting a 6-item tuple: (pages, eq_total, fig_total, report, page_counts_dict, gallery_list)
+        response: Tuple[Any, ...] = client.predict(
+            structured_file_input,
+            api_name="/gradio_process_pdf"
+        )
+        api_call_duration = time.time() - api_call_start
+        print(f"[TIMELOG] API Prediction Call took: {api_call_duration:.2f} seconds")
+
+        # 4. Parse the 6-item response (List/Tuple)
+        # We need at least 5 items (index 0 through 4) to get the page counts dict
+        if isinstance(response, (list, tuple)) and len(response) >= 5:
+            num_pages_str = str(response[0])
+            num_equations_str = str(response[1])
+            num_figures_str = str(response[2])
+
+            # Extract the 5th item (index 4), which is the Dict[str, int] of page counts
+            page_counts_dict = response[4]
+
+            # Map the results to the keys expected by your Flask route
+            final_result = {
+                "Total Pages in PDF": int(num_pages_str) if num_pages_str.isdigit() else num_pages_str,
+                "Total Equations Detected": int(
+                    num_equations_str) if num_equations_str.isdigit() else num_equations_str,
+                "Total Figures Detected": int(num_figures_str) if num_figures_str.isdigit() else num_figures_str,
+                # NEW KEY ADDED
+                "Equation Counts Per Page": page_counts_dict,
+            }
+
+            total_duration = time.time() - start_time
+            print(f"[TIMELOG] Total function execution took: {total_duration:.2f} seconds")
+            return final_result
+
+        # Fallback for unexpected format
+        total_duration = time.time() - start_time
+        print(f"[TIMELOG] Total function execution took (failed): {total_duration:.2f} seconds")
+        return {"raw_output": response,
+                "error": f"Unexpected output format from API. Expected a 6-item list, got {len(response)}."}
+
+    except Exception as e:
+        # Re-raise exceptions as ValueError for API failure
+        total_duration = time.time() - start_time
+        print(f"[TIMELOG] Total function execution took (exception): {total_duration:.2f} seconds")
+        raise ValueError(f"API call failed during prediction phase: {e}")
+
+    finally:
+        # 5. Clean up the temporary file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception as e:
+                print(f"[WARN] Failed to delete temporary file {tmp_path}: {e}")
