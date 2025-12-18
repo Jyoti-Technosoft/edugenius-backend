@@ -776,13 +776,32 @@ def fetch_submitted_test_by_testId(testId):
         print("fetch_submitted_test_by_testId error:", e)
         return None
 
+# def delete_single_question(questionId):
+#     try:
+#         client.delete(collection_name=COLLECTION_QUESTIONS, points=[questionId])
+#         return True
+#     except Exception as e:
+#         print("delete_single_question error:", e)
+#         return False
+
+
 def delete_single_question(questionId):
     try:
-        client.delete(collection_name=COLLECTION_QUESTIONS, points=[questionId])
+        # Use PointIdsList to explicitly tell Qdrant which IDs to remove
+        client.delete(
+            collection_name=COLLECTION_QUESTIONS,
+            points_selector=models.PointIdsList(
+                points=[questionId]
+            )
+        )
+        print(f"[INFO] Successfully deleted questionId: {questionId}")
         return True
     except Exception as e:
-        print("delete_single_question error:", e)
+        print(f"[ERROR] delete_single_question error: {e}")
         return False
+
+
+
 
 def update_single_question(questionId, updated_data):
     try:
