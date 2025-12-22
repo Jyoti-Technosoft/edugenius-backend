@@ -159,16 +159,18 @@ def call_yolo_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     """
     import mimetypes
 
-    load_env()
-    hf_space = os.environ.get("HF_SPACE")
-    hf_token = os.environ.get("HF_SPACE_TOKEN")
+    # load_env()
+    # hf_space = os.environ.get("HF_SPACE")
+    hf_space = 'heerjtdev/layout_latex'
+    # hf_token = os.environ.get("HF_SPACE_TOKEN")
 
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
 
     print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
     try:
-        client = Client(hf_space,hf_token=hf_token)
+        # client = Client(hf_space,hf_token=hf_token)
+        client = Client(hf_space)
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
@@ -231,7 +233,7 @@ def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     import mimetypes
 
     load_env()
-    hf_space = os.environ.get("HF_SPACE_LATEX")
+    hf_space = "heerjtdev/layout_latex"
 
     if not hf_space:
         raise RuntimeError("HF_SPACE not found in .env")
@@ -261,7 +263,7 @@ def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     }
 
     try:
-        response = client.predict(structured_input_list, api_name="/process_document")
+        response = client.predict([structured_input_list],"", api_name="/process_file")
     except Exception as e:
         raise ValueError(f"LayoutLM API call failed: {e}")
     finally:
