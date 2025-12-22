@@ -803,6 +803,23 @@ def delete_single_question(questionId):
 
 
 
+
+
+
+def normalize_answer(ans):
+    """
+    Cleans an answer string for comparison.
+    Example: '(A)' -> 'a', 'A.' -> 'a', 'a)' -> 'a'
+    """
+    if not isinstance(ans, str):
+        return str(ans).strip().lower()
+
+    # Remove parentheses, dots, and whitespace, then lowercase
+    # This regex removes everything that isn't a letter or a number
+    cleaned = re.sub(r'[^a-zA-Z0-9]', '', ans)
+    return cleaned.lower()
+
+
 def update_single_question(questionId, updated_data):
     try:
         # 🔹 Retrieve existing question (Qdrant returns a list)
