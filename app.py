@@ -37,7 +37,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer
 from werkzeug.utils import secure_filename
 
 
@@ -555,6 +555,116 @@ def test_history_by_userId(userId):
     return jsonify(test_history), 200
 
 
+# @app.route("/tests/submit", methods=["POST"])
+# def submit_test():
+#     """
+#     API to submit student answers, check correctness,
+#     calculate score, and store submission data.
+#     Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
+#     """
+#     data = request.get_json(silent=True) or {}
+#
+#     userId = data.get("userId")
+#     testId = data.get("testId")
+#     testTitle = data.get("testTitle")
+#     timeSpent = data.get("timeSpent")
+#     totalTime = data.get("totalTime")
+#     answers = data.get("answers")
+#
+#     if not all([userId, testId, answers]):
+#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
+#     if not isinstance(answers, list):
+#         return jsonify({"error": "Answers must be a list"}), 400
+#
+#     submittedAt = datetime.now().isoformat()
+#
+#     # 🧠 Fetch original test data (includes correct answers)
+#     test_data = fetch_test_by_testId(testId)
+#     if not test_data:
+#         return jsonify({"error": "Test not found"}), 404
+#
+#     questions = test_data.get("questions", [])
+#     if isinstance(questions, str):
+#         try:
+#             questions = json.loads(questions)
+#         except Exception:
+#             questions = []
+#
+#     # Build quick lookup of correct answers
+#     correct_map = {q.get("questionId"): q.get("answer") for q in questions}
+#
+#     totalQuestions = len(correct_map)
+#     total_correct = 0
+#     results = []
+#
+#     # ✅ Compare each submitted answer
+#     for ans in answers:
+#         qid = ans.get("questionId")
+#         qtext = ans.get("question")
+#         user_ans = ans.get("your_answer")
+#
+#         # Try to get correct answer using questionId first, then question text
+#         correct_ans = None
+#         if qid and qid in correct_map:
+#             correct_ans = correct_map.get(qid)
+#         elif qtext:
+#             for q in questions:
+#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
+#                     correct_ans = q.get("answer")
+#                     qid = q.get("questionId")
+#                     break
+#
+#         is_correct = (user_ans == correct_ans)
+#
+#         if is_correct:
+#             total_correct += 1
+#
+#         results.append(OrderedDict([
+#             ("questionId", qid),
+#             ("your_answer", user_ans),
+#             ("correct_answer", correct_ans),
+#             ("is_correct", is_correct)
+#         ]))
+#
+#     # 🧮 Calculate score
+#     score = round((total_correct / totalQuestions) * 100, 2) if totalQuestions > 0 else 0.0
+#
+#     # 💾 Store submission attempt in Qdrant or DB
+#     is_stored, attemptId = store_submitted_test(
+#         userId=userId,
+#         testId=testId,
+#         testTitle=testTitle,
+#         timeSpent=timeSpent,
+#         totalTime=totalTime,
+#         submittedAt=submittedAt,
+#         detailed_results=results,
+#         score=score,
+#         total_questions=totalQuestions,
+#         total_correct=total_correct
+#     )
+#
+#     if not is_stored:
+#         return jsonify({"error": "Failed to store submission"}), 500
+#
+#     # 📦 Final response
+#     response = OrderedDict([
+#         ("attemptId", attemptId),
+#         ("userId", userId),
+#         ("testId", testId),
+#         ("testTitle", testTitle),
+#         ("submittedAt", submittedAt),
+#         ("timeSpent", timeSpent),
+#         ("total_questions", totalQuestions),
+#         ("total_correct", total_correct),
+#         ("score", score),
+#         ("detailed_results", results)
+#     ])
+#
+#     return jsonify(response)
+
+
+
+
 @app.route("/tests/submit", methods=["POST"])
 def submit_test():
     """
@@ -614,7 +724,7 @@ def submit_test():
                     qid = q.get("questionId")
                     break
 
-        is_correct = (user_ans == correct_ans)
+        is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
 
         if is_correct:
             total_correct += 1
