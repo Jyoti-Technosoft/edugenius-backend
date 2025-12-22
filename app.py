@@ -308,7 +308,7 @@ def upload_image():
         # 3. Directly call model for each image
         print(f"[STEP] Calling LayoutLM model for {filename} ...")
         try:
-            result = call_yolo_api(file_bytes, filename)
+            result = latex_model(file_bytes, filename)
             print(f"[SUCCESS] Model returned result for {filename}")
             if isinstance(result, list):
                 all_results.extend(result)
