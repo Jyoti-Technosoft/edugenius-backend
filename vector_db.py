@@ -346,9 +346,168 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
     print(f"[INFO] All answers found: {all_have_answers}")
     return generatedQAId, all_have_answers
+#
+# def fetch_mcqs(userId: str = None, generatedQAId: str = None):
+#     # 🟢 A. Fetch by generatedQAId (Optimized, simpler path)
+#     if generatedQAId:
+#         filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))
+#             ]
+#         )
+#         dummy_vector = [0.0] * VECTOR_DIM
+#
+#         # Fetch parent bank (metadata)
+#         bank_hits = client.search(
+#             collection_name=COLLECTION_MCQ,
+#             query_vector=dummy_vector,
+#             query_filter=filt,
+#             limit=1,
+#             with_payload=True
+#         )
+#         if not bank_hits:
+#             return []
+#
+#         bank = bank_hits[0].payload or {}
+#
+#         # Fetch all questions belonging to this generatedQAId
+#         hits = client.scroll(
+#             collection_name=COLLECTION_QUESTIONS,
+#             scroll_filter=filt,
+#             limit=1000,
+#             with_payload=True,
+#         )[0]  # first element = list of points
+#
+#         mcq_list = []
+#         for h in hits:
+#             payload = h.payload if hasattr(h, "payload") else h.get("payload", {})
+#             if payload and "options" in payload and isinstance(payload["options"], str):
+#                 try:
+#                     payload["options"] = json.loads(payload["options"])
+#                 except Exception:
+#                     pass
+#
+#             # Define the standard fields we expect to be ordered
+#             standard_keys = [
+#                 "questionId", "generatedQAId", "userId", "question",
+#                 "options", "answer", "passage", "noise", "documentIndex","predicted_subject","predicted_concept"
+#             ]
+#
+#             # Create the ordered dictionary for the standard fields
+#             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
+#
+#             # 🟢 CHANGE 3: Inject non-standard fields (like equation77) directly into the result
+#             # Assuming image keys start with 'equation' or similar distinctive pattern
+#             for k, v in payload.items():
+#                 # Add any key not already in the standard set (e.g., equation77, equation79)
+#                 if k not in ordered_mcq and isinstance(v, str) and len(v) > 20:
+#                     ordered_mcq[k] = v
+#
+#             mcq_list.append(ordered_mcq)
+#
+#         # Sort by index
+#         mcq_list = sorted(mcq_list, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+#         bank["mcqs"] = mcq_list
+#
+#         return [{
+#             "id": generatedQAId,
+#             "document": bank.get("title", ""),
+#             "metadata": bank
+#         }]
+#
+#     # 🟢 B. Fetch all MCQ banks by userId (CRITICAL PERFORMANCE FIX)
+#     elif userId:
+#         userIdClean = str(userId).strip().lower()
+#         bank_filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
+#             ]
+#         )
+#         dummy_vector = [0.0] * VECTOR_DIM
+#
+#         # 1. Fetch all banks (metadata) for the user
+#         banks_hits = client.search(
+#             collection_name=COLLECTION_MCQ,
+#             query_vector=dummy_vector,
+#             query_filter=bank_filt,
+#             limit=1000,
+#             with_payload=True,
+#         )
+#
+#         # Map generatedQAId to its bank metadata
+#         bank_map = {}
+#         generated_ids = []
+#         for b in banks_hits:
+#             payload = b.payload or {}
+#             gen_id = payload.get("generatedQAId")
+#             if gen_id:
+#                 bank_map[gen_id] = payload
+#                 generated_ids.append(gen_id)
+#
+#         if not generated_ids:
+#             return []
+#
+#         # 2. Fetch ALL questions for ALL banks in ONE query (N+1 FIX)
+#         question_filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=generated_ids))
+#             ]
+#         )
+#
+#         # Scroll to get all relevant questions
+#         all_questions_hits = client.scroll(
+#             collection_name=COLLECTION_QUESTIONS,
+#             scroll_filter=question_filt,
+#             limit=10000,  # Increased limit to ensure all questions are retrieved
+#             with_payload=True,
+#         )[0]
+#
+#         # Group questions by their generatedQAId
+#         questions_by_bank = collections.defaultdict(list)
+#         for h in all_questions_hits:
+#             payload = h.payload or {}
+#             gen_id = payload.get("generatedQAId")
+#             if gen_id:
+#                 # Same payload logic as in the A. block, simplified here for grouping
+#                 if "options" in payload and isinstance(payload["options"], str):
+#                     try:
+#                         payload["options"] = json.loads(payload["options"])
+#                     except Exception:
+#                         pass
+#
+#                 questions_by_bank[gen_id].append(payload)
+#
+#         # 3. Assemble the final result structure
+#         results = []
+#         for gen_id, bank_payload in bank_map.items():
+#             mcq_list = questions_by_bank.get(gen_id, [])
+#
+#             # Sort the questions for the current bank
+#             mcq_list = sorted(mcq_list, key=lambda x: int(x.get("documentIndex", 9999)))
+#
+#             # Create the final desired output structure
+#             bank_payload["mcqs"] = mcq_list
+#             results.append({
+#                 "id": gen_id,
+#                 "document": bank_payload.get("title", ""),
+#                 "metadata": bank_payload
+#             })
+#
+#         return results
+#
+#     return []
 
-def fetch_mcqs(userId: str = None, generatedQAId: str = None):
-    # 🟢 A. Fetch by generatedQAId (Optimized, simpler path)
+
+def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, limit: int = 10):
+    """
+    Fetches MCQ banks and questions with pagination support.
+    :param page: The current page number (starts at 1)
+    :param limit: Number of questions to fetch per page
+    """
+    # Calculate offset for pagination
+    offset = (page - 1) * limit
+
+    # 🟢 A. Fetch by generatedQAId (PAGINATED DETAIL VIEW)
     if generatedQAId:
         filt = models.Filter(
             must=[
@@ -357,7 +516,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
         )
         dummy_vector = [0.0] * VECTOR_DIM
 
-        # Fetch parent bank (metadata)
+        # 1. Fetch parent bank (metadata)
         bank_hits = client.search(
             collection_name=COLLECTION_MCQ,
             query_vector=dummy_vector,
@@ -370,44 +529,61 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
 
         bank = bank_hits[0].payload or {}
 
-        # Fetch all questions belonging to this generatedQAId
-        hits = client.scroll(
+        # 2. Get TOTAL COUNT of questions for this bank
+        # This is vital for the frontend to know how many slides to build in total
+        total_questions = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=filt,
+            exact=True
+        ).count
+
+        # 3. Fetch ONLY the specific slice (Page) of questions using offset and limit
+        # This prevents loading 1000 questions into memory at once
+        hits, next_page_offset = client.scroll(
             collection_name=COLLECTION_QUESTIONS,
             scroll_filter=filt,
-            limit=1000,
+            limit=limit,
+            offset=offset,
             with_payload=True,
-        )[0]  # first element = list of points
+        )
 
         mcq_list = []
         for h in hits:
             payload = h.payload if hasattr(h, "payload") else h.get("payload", {})
+
+            # Standard parsing logic
             if payload and "options" in payload and isinstance(payload["options"], str):
                 try:
                     payload["options"] = json.loads(payload["options"])
                 except Exception:
                     pass
 
-            # Define the standard fields we expect to be ordered
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
-                "options", "answer", "passage", "noise", "documentIndex","predicted_subject","predicted_concept"
+                "options", "answer", "passage", "noise", "documentIndex",
+                "predicted_subject", "predicted_concept"
             ]
 
-            # Create the ordered dictionary for the standard fields
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
 
-            # 🟢 CHANGE 3: Inject non-standard fields (like equation77) directly into the result
-            # Assuming image keys start with 'equation' or similar distinctive pattern
+            # Inject non-standard fields (Base64 images/Equations)
             for k, v in payload.items():
-                # Add any key not already in the standard set (e.g., equation77, equation79)
                 if k not in ordered_mcq and isinstance(v, str) and len(v) > 20:
                     ordered_mcq[k] = v
 
             mcq_list.append(ordered_mcq)
 
-        # Sort by index
+        # 4. Sort the slice by documentIndex
         mcq_list = sorted(mcq_list, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+
+        # Attach slice to the metadata
         bank["mcqs"] = mcq_list
+        bank["pagination"] = {
+            "total_count": total_questions,
+            "current_page": page,
+            "limit": limit,
+            "has_more": (offset + limit) < total_questions
+        }
 
         return [{
             "id": generatedQAId,
@@ -415,7 +591,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
             "metadata": bank
         }]
 
-    # 🟢 B. Fetch all MCQ banks by userId (CRITICAL PERFORMANCE FIX)
+    # 🟢 B. Fetch all MCQ banks by userId (DASHBOARD LIST VIEW)
     elif userId:
         userIdClean = str(userId).strip().lower()
         bank_filt = models.Filter(
@@ -425,7 +601,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
         )
         dummy_vector = [0.0] * VECTOR_DIM
 
-        # 1. Fetch all banks (metadata) for the user
+        # Fetch all banks metadata
         banks_hits = client.search(
             collection_name=COLLECTION_MCQ,
             query_vector=dummy_vector,
@@ -434,7 +610,6 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
             with_payload=True,
         )
 
-        # Map generatedQAId to its bank metadata
         bank_map = {}
         generated_ids = []
         for b in banks_hits:
@@ -447,45 +622,36 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None):
         if not generated_ids:
             return []
 
-        # 2. Fetch ALL questions for ALL banks in ONE query (N+1 FIX)
+        # Fetch questions for all banks
         question_filt = models.Filter(
             must=[
                 models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=generated_ids))
             ]
         )
 
-        # Scroll to get all relevant questions
         all_questions_hits = client.scroll(
             collection_name=COLLECTION_QUESTIONS,
             scroll_filter=question_filt,
-            limit=10000,  # Increased limit to ensure all questions are retrieved
+            limit=10000,
             with_payload=True,
         )[0]
 
-        # Group questions by their generatedQAId
         questions_by_bank = collections.defaultdict(list)
         for h in all_questions_hits:
             payload = h.payload or {}
             gen_id = payload.get("generatedQAId")
             if gen_id:
-                # Same payload logic as in the A. block, simplified here for grouping
                 if "options" in payload and isinstance(payload["options"], str):
                     try:
                         payload["options"] = json.loads(payload["options"])
                     except Exception:
                         pass
-
                 questions_by_bank[gen_id].append(payload)
 
-        # 3. Assemble the final result structure
         results = []
         for gen_id, bank_payload in bank_map.items():
             mcq_list = questions_by_bank.get(gen_id, [])
-
-            # Sort the questions for the current bank
             mcq_list = sorted(mcq_list, key=lambda x: int(x.get("documentIndex", 9999)))
-
-            # Create the final desired output structure
             bank_payload["mcqs"] = mcq_list
             results.append({
                 "id": gen_id,
