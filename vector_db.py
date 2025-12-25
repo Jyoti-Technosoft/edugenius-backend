@@ -346,7 +346,7 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
     print(f"[INFO] All answers found: {all_have_answers}")
     return generatedQAId, all_have_answers
-#
+# #
 # def fetch_mcqs(userId: str = None, generatedQAId: str = None):
 #     # 🟢 A. Fetch by generatedQAId (Optimized, simpler path)
 #     if generatedQAId:
