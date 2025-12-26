@@ -834,7 +834,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
     return []
 
 def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
-    records = fetch_mcqs(generatedQAId=generatedQAId)
+    records = fetch_mcqs(generatedQAId=generatedQAId, page=1, limit=1000)
     if not records:
         return []
     record = records[0]
