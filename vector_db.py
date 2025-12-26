@@ -498,6 +498,173 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
 #     return []
 
 
+# def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, limit: int = 10):
+#     """
+#     Fetches MCQ banks and questions with pagination support.
+#     :param page: The current page number (starts at 1)
+#     :param limit: Number of questions to fetch per page
+#     """
+#     # Calculate offset for pagination
+#     offset = (page - 1) * limit
+#
+#     # 🟢 A. Fetch by generatedQAId (PAGINATED DETAIL VIEW)
+#     if generatedQAId:
+#         filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=generatedQAId))
+#             ]
+#         )
+#         dummy_vector = [0.0] * VECTOR_DIM
+#
+#         # 1. Fetch parent bank (metadata)
+#         bank_hits = client.search(
+#             collection_name=COLLECTION_MCQ,
+#             query_vector=dummy_vector,
+#             query_filter=filt,
+#             limit=1,
+#             with_payload=True
+#         )
+#         if not bank_hits:
+#             return []
+#
+#         bank = bank_hits[0].payload or {}
+#
+#         # 2. Get TOTAL COUNT of questions for this bank
+#         # This is vital for the frontend to know how many slides to build in total
+#         total_questions = client.count(
+#             collection_name=COLLECTION_QUESTIONS,
+#             count_filter=filt,
+#             exact=True
+#         ).count
+#
+#         # 3. Fetch ONLY the specific slice (Page) of questions using offset and limit
+#         # This prevents loading 1000 questions into memory at once
+#         hits, next_page_offset = client.scroll(
+#             collection_name=COLLECTION_QUESTIONS,
+#             scroll_filter=filt,
+#             limit=limit,
+#             offset=offset,
+#             with_payload=True,
+#         )
+#
+#         mcq_list = []
+#         for h in hits:
+#             payload = h.payload if hasattr(h, "payload") else h.get("payload", {})
+#
+#             # Standard parsing logic
+#             if payload and "options" in payload and isinstance(payload["options"], str):
+#                 try:
+#                     payload["options"] = json.loads(payload["options"])
+#                 except Exception:
+#                     pass
+#
+#             standard_keys = [
+#                 "questionId", "generatedQAId", "userId", "question",
+#                 "options", "answer", "passage", "noise", "documentIndex",
+#                 "predicted_subject", "predicted_concept"
+#             ]
+#
+#             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
+#
+#             # Inject non-standard fields (Base64 images/Equations)
+#             for k, v in payload.items():
+#                 if k not in ordered_mcq and isinstance(v, str) and len(v) > 20:
+#                     ordered_mcq[k] = v
+#
+#             mcq_list.append(ordered_mcq)
+#
+#         # 4. Sort the slice by documentIndex
+#         mcq_list = sorted(mcq_list, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+#
+#         # Attach slice to the metadata
+#         bank["mcqs"] = mcq_list
+#         bank["pagination"] = {
+#             "total_count": total_questions,
+#             "current_page": page,
+#             "limit": limit,
+#             "has_more": (offset + limit) < total_questions
+#         }
+#
+#         return [{
+#             "id": generatedQAId,
+#             "document": bank.get("title", ""),
+#             "metadata": bank
+#         }]
+#
+#     # 🟢 B. Fetch all MCQ banks by userId (DASHBOARD LIST VIEW)
+#     elif userId:
+#         userIdClean = str(userId).strip().lower()
+#         bank_filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
+#             ]
+#         )
+#         dummy_vector = [0.0] * VECTOR_DIM
+#
+#         # Fetch all banks metadata
+#         banks_hits = client.search(
+#             collection_name=COLLECTION_MCQ,
+#             query_vector=dummy_vector,
+#             query_filter=bank_filt,
+#             limit=1000,
+#             with_payload=True,
+#         )
+#
+#         bank_map = {}
+#         generated_ids = []
+#         for b in banks_hits:
+#             payload = b.payload or {}
+#             gen_id = payload.get("generatedQAId")
+#             if gen_id:
+#                 bank_map[gen_id] = payload
+#                 generated_ids.append(gen_id)
+#
+#         if not generated_ids:
+#             return []
+#
+#         # Fetch questions for all banks
+#         question_filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=generated_ids))
+#             ]
+#         )
+#
+#         all_questions_hits = client.scroll(
+#             collection_name=COLLECTION_QUESTIONS,
+#             scroll_filter=question_filt,
+#             limit=10000,
+#             with_payload=True,
+#         )[0]
+#
+#         questions_by_bank = collections.defaultdict(list)
+#         for h in all_questions_hits:
+#             payload = h.payload or {}
+#             gen_id = payload.get("generatedQAId")
+#             if gen_id:
+#                 if "options" in payload and isinstance(payload["options"], str):
+#                     try:
+#                         payload["options"] = json.loads(payload["options"])
+#                     except Exception:
+#                         pass
+#                 questions_by_bank[gen_id].append(payload)
+#
+#         results = []
+#         for gen_id, bank_payload in bank_map.items():
+#             mcq_list = questions_by_bank.get(gen_id, [])
+#             mcq_list = sorted(mcq_list, key=lambda x: int(x.get("documentIndex", 9999)))
+#             bank_payload["mcqs"] = mcq_list
+#             results.append({
+#                 "id": gen_id,
+#                 "document": bank_payload.get("title", ""),
+#                 "metadata": bank_payload
+#             })
+#
+#         return results
+#
+#     return []
+
+
+
 def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, limit: int = 10):
     """
     Fetches MCQ banks and questions with pagination support.
@@ -537,17 +704,17 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             exact=True
         ).count
 
-        # 3. Fetch ONLY the specific slice (Page) of questions using offset and limit
-        # This prevents loading 1000 questions into memory at once
+        # 3. 🔥 FIX: Fetch all questions, then slice in memory
+        # Qdrant's scroll 'offset' is a cursor/scroll_id, not a numeric row offset
+        # For proper pagination, we need to fetch all and slice
         hits, next_page_offset = client.scroll(
             collection_name=COLLECTION_QUESTIONS,
             scroll_filter=filt,
-            limit=limit,
-            offset=offset,
+            limit=total_questions,  # Fetch all questions for this bank
             with_payload=True,
         )
 
-        mcq_list = []
+        all_mcqs = []
         for h in hits:
             payload = h.payload if hasattr(h, "payload") else h.get("payload", {})
 
@@ -571,10 +738,13 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
                 if k not in ordered_mcq and isinstance(v, str) and len(v) > 20:
                     ordered_mcq[k] = v
 
-            mcq_list.append(ordered_mcq)
+            all_mcqs.append(ordered_mcq)
 
-        # 4. Sort the slice by documentIndex
-        mcq_list = sorted(mcq_list, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+        # 4. Sort ALL questions by documentIndex
+        all_mcqs = sorted(all_mcqs, key=lambda x: int(x["documentIndex"]) if x.get("documentIndex") else float("inf"))
+
+        # 5. Slice for the requested page
+        mcq_list = all_mcqs[offset:offset + limit]
 
         # Attach slice to the metadata
         bank["mcqs"] = mcq_list
