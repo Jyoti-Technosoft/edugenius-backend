@@ -335,16 +335,18 @@ def upload_image():
 @app.route("/question-banks", methods=["GET"])
 def get_question_banks_by_user():
     userId = request.args.get("userId")
-
     if not userId:
         return jsonify({"error": "userId is required"}), 400
 
-    banks = fetch_question_banks_metadata(userId)
+    # Normalize case like in store_mcqs
+    userId = userId.strip().lower()
 
+    banks = fetch_question_banks_metadata(userId)
     if not banks:
         return jsonify({"message": "No Question Banks found"})
 
     return jsonify(banks)
+
 
 
 # @app.route("/question-banks/<generatedQAId>", methods=["GET"])
