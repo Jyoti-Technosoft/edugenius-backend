@@ -860,6 +860,118 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
     record["metadata"]["mcqs"] = formatted
     return [record]
 
+
+
+def fetch_question_banks_metadata(userId):
+    results = []
+    next_offset = None
+
+    while True:
+        banks, next_offset = client.scroll(
+            collection_name=COLLECTION_MCQ,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="userId",
+                        match=models.MatchValue(value=userId)
+                    )
+                ]
+            ),
+            limit=100,
+            offset=next_offset
+        )
+
+        if not banks:
+            break
+
+        for bank in banks:
+            payload = bank.payload or {}
+            generatedQAId = bank.id
+
+            # 🔢 Always fresh question count
+            count = client.count(
+                collection_name=COLLECTION_QUESTIONS,
+                count_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="generatedQAId",
+                            match=models.MatchValue(value=generatedQAId)
+                        )
+                    ]
+                )
+            )
+
+            # 🏷️ Compute tags dynamically
+            tags = compute_subject_tags_for_bank(generatedQAId)
+
+            results.append({
+                "generatedQAId": generatedQAId,
+                "title": payload.get("title", ""),
+                "description": payload.get("description", ""),
+                "createdAt": payload.get("createdAt"),
+                "answerFound": payload.get("answerFound", False),
+                "totalQuestions": count.count,
+                "tags": tags
+            })
+
+        if next_offset is None:
+            break
+
+    return results
+
+
+
+
+
+
+
+
+from collections import Counter
+
+def compute_subject_tags_for_bank(generatedQAId, top_k=2):
+    subject_counter = Counter()
+    next_offset = None
+
+    while True:
+        points, next_offset = client.scroll(
+            collection_name=COLLECTION_QUESTIONS,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="generatedQAId",
+                        match=models.MatchValue(value=generatedQAId)
+                    )
+                ]
+            ),
+            limit=200,
+            offset=next_offset,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        if not points:
+            break
+
+        for point in points:
+            payload = point.payload or {}
+            pred_sub = payload.get("predicted_subject", {})
+            label = pred_sub.get("label")
+
+            if label:
+                subject_counter[label] += 1
+
+        if next_offset is None:
+            break
+
+    # Take top K subjects by frequency
+    return [label for label, _ in subject_counter.most_common(top_k)]
+
+
+
+
+
+
+
 def store_test_session(userId, testId, testTitle, totalTime, createdAt, mcqs_data):
     try:
         userIdClean = str(userId).strip().lower()
