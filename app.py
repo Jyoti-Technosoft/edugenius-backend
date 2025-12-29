@@ -37,7 +37,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata
 from werkzeug.utils import secure_filename
 
 
@@ -295,36 +295,56 @@ def upload_image():
         }, ensure_ascii=False),
         mimetype="application/json"
     )
+
+
+# @app.route("/question-banks", methods=["GET"])
+# def get_question_banks_by_user():
+#     userId = request.args.get("userId")  # ✅ GET query params
+#
+#     if not userId:
+#         return jsonify({"error": "userId is required"}), 400
+#
+#     mcqs_data = fetch_mcqs(userId=userId)
+#     if not mcqs_data:
+#         return jsonify({"message": "No Paper Sets found"})
+#
+#     # FIX: Iterate through each paper set and sort its MCQs list
+#     for paper_set in mcqs_data:
+#         # Check if the 'mcqs' list exists and is iterable
+#         if paper_set.get('metadata', {}).get('mcqs'):
+#             mcqs_list = paper_set['metadata']['mcqs']
+#
+#             # This handles older data that might have missing or None 'documentIndex' values.
+#             paper_set['metadata']['mcqs'] = sorted(
+#                 mcqs_list,
+#                 key=lambda x: int(x['documentIndex'])
+#                 if x.get('documentIndex') is not None else float('inf')
+#             )
+#             # ===============================================
+#
+#     return Response(
+#         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
+#         mimetype="application/json"
+#     )
+#
+
+
+
+
+
 @app.route("/question-banks", methods=["GET"])
 def get_question_banks_by_user():
-    userId = request.args.get("userId")  # ✅ GET query params
+    userId = request.args.get("userId")
 
     if not userId:
         return jsonify({"error": "userId is required"}), 400
 
-    mcqs_data = fetch_mcqs(userId=userId)
-    if not mcqs_data:
-        return jsonify({"message": "No Paper Sets found"})
+    banks = fetch_question_banks_metadata(userId)
 
-    # FIX: Iterate through each paper set and sort its MCQs list
-    for paper_set in mcqs_data:
-        # Check if the 'mcqs' list exists and is iterable
-        if paper_set.get('metadata', {}).get('mcqs'):
-            mcqs_list = paper_set['metadata']['mcqs']
+    if not banks:
+        return jsonify({"message": "No Question Banks found"})
 
-            # This handles older data that might have missing or None 'documentIndex' values.
-            paper_set['metadata']['mcqs'] = sorted(
-                mcqs_list,
-                key=lambda x: int(x['documentIndex'])
-                if x.get('documentIndex') is not None else float('inf')
-            )
-            # ===============================================
-
-    return Response(
-        json.dumps(mcqs_data, ensure_ascii=False, indent=4),
-        mimetype="application/json"
-    )
-
+    return jsonify(banks)
 
 
 # @app.route("/question-banks/<generatedQAId>", methods=["GET"])
