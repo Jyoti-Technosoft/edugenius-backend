@@ -485,3 +485,35 @@ def call_feeedback_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 os.remove(tmp_path)
             except Exception as e:
                 print(f"[WARN] Failed to delete temporary file {tmp_path}: {e}")
+
+
+from gradio_client import Client
+
+
+def get_grading_report(kb_text, question_text, answer_text):
+    try:
+        # Initialize client
+        client = Client("heerjtdev/answer_validator")
+
+        # USE THE API NAME FOUND: "/evaluate"
+        result = client.predict(
+            kb=kb_text,
+            question=question_text,
+            answer=answer_text,
+            api_name="/evaluate"  # <--- Changed from /predict to /evaluate
+        )
+
+        return result
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# --- Test the connection ---
+if __name__ == "__main__":
+    kb = "Photosynthesis requires sunlight, CO2, and water."
+    q = "What is needed for photosynthesis?"
+    ans = "Sunlight and water are the main components."
+
+    report = get_hf_grading_report(kb, q, ans)
+    print(report)
