@@ -527,7 +527,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
                 "options", "answer", "passage", "noise", "documentIndex",
-                "predicted_subject", "predicted_concept"
+                "predicted_subject", "predicted_concept", "knowledge_base"
             ]
 
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
