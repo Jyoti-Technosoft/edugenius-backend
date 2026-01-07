@@ -1272,12 +1272,142 @@ def grade_test_analysis():
 
 
 
+# @app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
+# def grade_descriptive_questions(attemptId):
+#     """
+#     Grade all pending descriptive questions for a specific test attempt.
+#     Stores the full AI feedback report for each question.
+#     Frontend should call this immediately after /tests/submit if there are descriptive questions.
+#     """
+#     try:
+#         # Fetch the submission
+#         results = client.retrieve(
+#             collection_name=COLLECTION_SUBMITTED,
+#             ids=[attemptId],
+#             with_payload=True,
+#             with_vectors=False
+#         )
+#
+#         if not results:
+#             return jsonify({"error": "Submission not found"}), 404
+#
+#         payload = _extract_payload(results[0])
+#         detailed_results = json.loads(payload.get("detailed_results", "[]"))
+#
+#         # This will store the full AI feedback for each descriptive question
+#         ai_feedback = {}
+#
+#         total_descriptive_score = 0
+#
+#         graded_count = 0
+#
+#         # Process each descriptive question
+#         for result in detailed_results:
+#             if result.get("question_type") == "DESCRIPTIVE" and result.get("status") == "pending_grading":
+#                 question_id = result.get("questionId")
+#                 student_answer = result.get("your_answer", "")
+#
+#                 # Fetch context for grading
+#                 context = fetch_question_context(question_id)
+#                 if not context:
+#                     result["status"] = "grading_error"
+#                     result["error"] = "Context not found"
+#                     continue
+#
+#                 # Prepare data for AI grading
+#                 combined_kb = f"Passage: {context['passage']}\n\nSource Info: {context['knowledge_base']}"
+#                 question_text = context['question']
+#
+#                 try:
+#                     # Call grading API - this returns the full report
+#                     report = get_grading_report(
+#                         kb_text=combined_kb,
+#                         question_text=question_text,
+#                         answer_text=student_answer
+#                     )
+#
+#                     print(f"\n[DEBUG] AI Grading Report for {question_id}:")
+#                     print(json.dumps(report, indent=2))
+#
+#                     # Extract score from the report
+#                     ai_score = float(report.get("total_score", 0))
+#
+#                     # Store the FULL AI feedback report
+#                     ai_feedback[question_id] = report
+#
+#                     # Update the result with AI grading info
+#                     result["ai_score"] = ai_score
+#                     result["status"] = "graded"
+#
+#                     # Determine if answer is correct based on score threshold
+#                     # You can adjust this threshold (currently 6 out of 10)
+#                     # score_threshold = 6.0
+#                     # result["is_correct"] = ai_score >= score_threshold
+#                     weight = 1.0  # Weight for this question
+#                     partial_credit = (ai_score / 10.0) * weight
+#                     result["partial_score"] = partial_credit
+#
+#                     total_descriptive_score += ai_score
+#                     graded_count += 1
+#
+#                 except Exception as e:
+#                     print(f"[ERROR] Grading failed for {question_id}: {e}")
+#                     result["status"] = "grading_error"
+#                     result["error"] = str(e)
+#
+#         # Recalculate total score
+#         total_questions = int(payload.get("total_questions", 0))
+#         mcq_correct = int(payload.get("mcq_correct", 0))
+#
+#         # Count descriptive questions considered correct
+#         descriptive_correct = sum(1 for r in detailed_results
+#                                   if r.get("question_type") == "DESCRIPTIVE"
+#                                   and r.get("is_correct") == True)
+#
+#         # total_correct = mcq_correct + descriptive_correct
+#         total_correct = mcq_correct + sum(r.get("partial_score", 0) for r in detailed_results
+#                                          if r.get("question_type") == "DESCRIPTIVE")
+#
+#         final_score = round((total_correct / total_questions) * 100, 2) if total_questions > 0 else 0.0
+#
+#         # Calculate average descriptive score (out of 10)
+#         descriptive_average = round(total_descriptive_score / graded_count, 2) if graded_count > 0 else 0
+#
+#         # Update the submission with complete grading
+#         updated_payload = payload.copy()
+#         updated_payload["detailed_results"] = json.dumps(detailed_results)
+#         updated_payload["total_correct"] = total_correct
+#         updated_payload["score"] = final_score
+#         updated_payload["grading_status"] = "complete"
+#         updated_payload["descriptive_average_score"] = descriptive_average
+#         updated_payload["ai_feedback"] = json.dumps(ai_feedback)  # 🟢 Store full AI feedback
+#
+#         vec = embed(f"submitted_test:{payload['testId']}:{attemptId}")[0]
+#         p = models.PointStruct(id=attemptId, vector=vec, payload=updated_payload)
+#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
+#
+#         return jsonify({
+#             "status": "success",
+#             "attemptId": attemptId,
+#             "final_score": final_score,
+#             "total_correct": total_correct,
+#             "grading_status": "complete",
+#             "descriptive_average_score": descriptive_average,
+#             "graded_count": graded_count,
+#             "ai_feedback": ai_feedback,  # Return full feedback to frontend
+#             "detailed_results": detailed_results
+#         })
+#
+#     except Exception as e:
+#         print(f"[ERROR] grade_descriptive_questions: {e}")
+#         return jsonify({"error": str(e)}), 500
+
+
 @app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
 def grade_descriptive_questions(attemptId):
     """
     Grade all pending descriptive questions for a specific test attempt.
-    Stores the full AI feedback report for each question.
-    Frontend should call this immediately after /tests/submit if there are descriptive questions.
+    Calculates partial credit based on suggested_mark and updates aggregate scores.
     """
     try:
         # Fetch the submission
@@ -1294,10 +1424,9 @@ def grade_descriptive_questions(attemptId):
         payload = _extract_payload(results[0])
         detailed_results = json.loads(payload.get("detailed_results", "[]"))
 
-        # This will store the full AI feedback for each descriptive question
+        # Map to store full AI feedback reports
         ai_feedback = {}
-
-        total_descriptive_score = 0
+        total_descriptive_points = 0.0
         graded_count = 0
 
         # Process each descriptive question
@@ -1313,40 +1442,34 @@ def grade_descriptive_questions(attemptId):
                     result["error"] = "Context not found"
                     continue
 
-                # Prepare data for AI grading
                 combined_kb = f"Passage: {context['passage']}\n\nSource Info: {context['knowledge_base']}"
                 question_text = context['question']
 
                 try:
-                    # Call grading API - this returns the full report
+                    # Call grading API
                     report = get_grading_report(
                         kb_text=combined_kb,
                         question_text=question_text,
                         answer_text=student_answer
                     )
 
-                    print(f"\n[DEBUG] AI Grading Report for {question_id}:")
-                    print(json.dumps(report, indent=2))
-
-                    # Extract score from the report
-                    ai_score = float(report.get("total_score", 0))
+                    # Extract score (0-10) and calculate partial credit (0.0-1.0)
+                    # Support both 'total_score' and 'suggested_mark' keys found in your logs
+                    ai_score = float(report.get("suggested_mark") or report.get("total_score") or 0)
 
                     # Store the FULL AI feedback report
                     ai_feedback[question_id] = report
 
-                    # Update the result with AI grading info
+                    # Update the result with partial credit info
+                    partial_credit = ai_score / 10.0
                     result["ai_score"] = ai_score
+                    result["partial_score"] = partial_credit
                     result["status"] = "graded"
 
-                    # Determine if answer is correct based on score threshold
-                    # You can adjust this threshold (currently 6 out of 10)
-                    score_threshold = 6.0
-                    # result["is_correct"] = ai_score >= score_threshold
-                    weight = 1.0  # Weight for this question
-                    partial_credit = (ai_score / 10.0) * weight
-                    result["partial_score"] = partial_credit
+                    # For UI icons: consider > 50% as 'correct'
+                    result["is_correct"] = ai_score >= 5.0
 
-                    total_descriptive_score += ai_score
+                    total_descriptive_points += partial_credit
                     graded_count += 1
 
                 except Exception as e:
@@ -1354,36 +1477,28 @@ def grade_descriptive_questions(attemptId):
                     result["status"] = "grading_error"
                     result["error"] = str(e)
 
-        # Recalculate total score
+        # Recalculate aggregate totals
         total_questions = int(payload.get("total_questions", 0))
-        mcq_correct = int(payload.get("mcq_correct", 0))
+        mcq_correct = float(payload.get("mcq_correct", 0))
 
-        # Count descriptive questions considered correct
-        descriptive_correct = sum(1 for r in detailed_results
-                                  if r.get("question_type") == "DESCRIPTIVE"
-                                  and r.get("is_correct") == True)
-
-        # total_correct = mcq_correct + descriptive_correct
-        total_correct = mcq_correct + sum(r.get("partial_score", 0) for r in detailed_results
-                                         if r.get("question_type") == "DESCRIPTIVE")
-
+        # Sum of MCQ points and Partial Descriptive points
+        total_correct = mcq_correct + total_descriptive_points
         final_score = round((total_correct / total_questions) * 100, 2) if total_questions > 0 else 0.0
 
-        # Calculate average descriptive score (out of 10)
-        descriptive_average = round(total_descriptive_score / graded_count, 2) if graded_count > 0 else 0
-
-        # Update the submission with complete grading
+        # Update the submission in Qdrant with floating point results
         updated_payload = payload.copy()
         updated_payload["detailed_results"] = json.dumps(detailed_results)
-        updated_payload["total_correct"] = total_correct
+        updated_payload["total_correct"] = total_correct  # Now a float (e.g., 0.5)
         updated_payload["score"] = final_score
         updated_payload["grading_status"] = "complete"
-        updated_payload["descriptive_average_score"] = descriptive_average
-        updated_payload["ai_feedback"] = json.dumps(ai_feedback)  # 🟢 Store full AI feedback
+        updated_payload["ai_feedback"] = json.dumps(ai_feedback)
 
-        vec = embed(f"submitted_test:{payload['testId']}:{attemptId}")[0]
-        p = models.PointStruct(id=attemptId, vector=vec, payload=updated_payload)
-        client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
+        # Use set_payload to preserve existing vectors while updating data
+        client.set_payload(
+            collection_name=COLLECTION_SUBMITTED,
+            payload=updated_payload,
+            points=[attemptId]
+        )
 
         return jsonify({
             "status": "success",
@@ -1391,15 +1506,14 @@ def grade_descriptive_questions(attemptId):
             "final_score": final_score,
             "total_correct": total_correct,
             "grading_status": "complete",
-            "descriptive_average_score": descriptive_average,
-            "graded_count": graded_count,
-            "ai_feedback": ai_feedback,  # Return full feedback to frontend
+            "ai_feedback": ai_feedback,
             "detailed_results": detailed_results
         })
 
     except Exception as e:
         print(f"[ERROR] grade_descriptive_questions: {e}")
         return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == '__main__':
