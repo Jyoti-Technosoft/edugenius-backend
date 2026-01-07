@@ -355,7 +355,7 @@ def get_question_banks_by_user():
 @app.route("/question-banks/<generatedQAId>", methods=["GET"])
 def get_question_bank_by_id(generatedQAId):
     page = request.args.get('page', default=1, type=int)
-    limit = request.args.get('limit', default=10, type=int)
+    limit = request.args.get('limit', default=10000, type=int)
 
     # Change 'page_size' to 'limit' here to match your function definition
     result = fetch_mcqs(generatedQAId=generatedQAId, page=page, limit=limit)
@@ -1341,7 +1341,10 @@ def grade_descriptive_questions(attemptId):
                     # Determine if answer is correct based on score threshold
                     # You can adjust this threshold (currently 6 out of 10)
                     score_threshold = 6.0
-                    result["is_correct"] = ai_score >= score_threshold
+                    # result["is_correct"] = ai_score >= score_threshold
+                    weight = 1.0  # Weight for this question
+                    partial_credit = (ai_score / 10.0) * weight
+                    result["partial_score"] = partial_credit
 
                     total_descriptive_score += ai_score
                     graded_count += 1
@@ -1360,7 +1363,10 @@ def grade_descriptive_questions(attemptId):
                                   if r.get("question_type") == "DESCRIPTIVE"
                                   and r.get("is_correct") == True)
 
-        total_correct = mcq_correct + descriptive_correct
+        # total_correct = mcq_correct + descriptive_correct
+        total_correct = mcq_correct + sum(r.get("partial_score", 0) for r in detailed_results
+                                         if r.get("question_type") == "DESCRIPTIVE")
+
         final_score = round((total_correct / total_questions) * 100, 2) if total_questions > 0 else 0.0
 
         # Calculate average descriptive score (out of 10)
