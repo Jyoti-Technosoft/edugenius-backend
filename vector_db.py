@@ -882,10 +882,50 @@ def test_sessions_by_userId(userId):
         print("test_sessions_by_userId error:", e)
         return None
 
-def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions, total_correct):
+# def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions, total_correct):
+#     try:
+#         userIdClean = str(userId).strip().lower()
+#         attemptId = str(uuid.uuid4())  # 🔹 Unique ID for each test attempt
+#
+#         payload = {
+#             "attemptId": attemptId,
+#             "userId": userIdClean,
+#             "testId": testId,
+#             "testTitle": testTitle,
+#             "timeSpent": timeSpent,
+#             "totalTime": totalTime,
+#             "submittedAt": submittedAt,
+#             "score": score,
+#             "total_questions": total_questions,
+#             "detailed_results": json.dumps(detailed_results),
+#             "total_correct": total_correct
+#         }
+#
+#         # Use testId + attemptId to make vector unique per attempt
+#         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
+#
+#         # Store using attemptId as unique point ID
+#         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
+#
+#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
+#         return True,attemptId
+#
+#     except Exception as e:
+#         print("store_submitted_test error:", e)
+#         return False
+
+
+def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,
+                         detailed_results, score, total_questions, total_correct,
+                         total_mcq=0, total_descriptive=0, mcq_correct=0,
+                         grading_status="complete", ai_feedback=None):
+    """
+    Store submitted test with support for both MCQ and Descriptive questions.
+    ai_feedback: dict mapping questionId to full AI grading report
+    """
     try:
         userIdClean = str(userId).strip().lower()
-        attemptId = str(uuid.uuid4())  # 🔹 Unique ID for each test attempt
+        attemptId = str(uuid.uuid4())
 
         payload = {
             "attemptId": attemptId,
@@ -897,22 +937,25 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "submittedAt": submittedAt,
             "score": score,
             "total_questions": total_questions,
+            "total_correct": total_correct,
+            "total_mcq": total_mcq,
+            "total_descriptive": total_descriptive,
+            "mcq_correct": mcq_correct,
+            "grading_status": grading_status,
             "detailed_results": json.dumps(detailed_results),
-            "total_correct": total_correct
+            "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})  # 🟢 NEW FIELD
         }
 
-        # Use testId + attemptId to make vector unique per attempt
         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
-
-        # Store using attemptId as unique point ID
         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
-
         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
-        return True,attemptId
 
+        return True, attemptId
     except Exception as e:
         print("store_submitted_test error:", e)
-        return False
+        return False, None
+
+
 
 def submitted_tests_by_userId(userId):
     try:
