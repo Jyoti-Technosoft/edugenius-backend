@@ -4,6 +4,7 @@ import pickle
 from typing import Dict, Any, Tuple, List
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+from qdrant_client import QdrantClient, models
 import os
 import json
 from datetime import datetime
@@ -37,7 +38,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload
 
 
 from werkzeug.utils import secure_filename
@@ -526,6 +527,8 @@ def test_history_by_userId(userId):
     return jsonify(test_history), 200
 
 
+#
+#
 # @app.route("/tests/submit", methods=["POST"])
 # def submit_test():
 #     """
@@ -585,7 +588,7 @@ def test_history_by_userId(userId):
 #                     qid = q.get("questionId")
 #                     break
 #
-#         is_correct = (user_ans == correct_ans)
+#         is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
 #
 #         if is_correct:
 #             total_correct += 1
@@ -634,17 +637,14 @@ def test_history_by_userId(userId):
 #     return jsonify(response)
 
 
-
-
 @app.route("/tests/submit", methods=["POST"])
 def submit_test():
     """
-    API to submit student answers, check correctness,
-    calculate score, and store submission data.
+    API to submit student answers, check correctness for MCQs,
+    defer grading for Descriptive questions, calculate score, and store submission data.
     Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
     """
     data = request.get_json(silent=True) or {}
-
     userId = data.get("userId")
     testId = data.get("testId")
     testTitle = data.get("testTitle")
@@ -659,7 +659,7 @@ def submit_test():
 
     submittedAt = datetime.now().isoformat()
 
-    # 🧠 Fetch original test data (includes correct answers)
+    # 🧠 Fetch original test data
     test_data = fetch_test_by_testId(testId)
     if not test_data:
         return jsonify({"error": "Test not found"}), 404
@@ -671,46 +671,96 @@ def submit_test():
         except Exception:
             questions = []
 
-    # Build quick lookup of correct answers
-    correct_map = {q.get("questionId"): q.get("answer") for q in questions}
+    # Build lookup for questions
+    question_map = {}
+    for q in questions:
+        qid = q.get("questionId")
+        if qid:
+            question_map[qid] = q
 
-    totalQuestions = len(correct_map)
+    totalQuestions = len(question_map)
     total_correct = 0
+    total_mcq = 0
+    total_descriptive = 0
+    mcq_correct = 0
     results = []
+    descriptive_question_ids = []
 
-    # ✅ Compare each submitted answer
+    # ✅ Process each submitted answer based on question type
     for ans in answers:
         qid = ans.get("questionId")
         qtext = ans.get("question")
         user_ans = ans.get("your_answer")
 
-        # Try to get correct answer using questionId first, then question text
-        correct_ans = None
-        if qid and qid in correct_map:
-            correct_ans = correct_map.get(qid)
+        # Find the question details
+        question_details = None
+        if qid and qid in question_map:
+            question_details = question_map.get(qid)
         elif qtext:
             for q in questions:
                 if qtext.strip().lower() == q.get("question", "").strip().lower():
-                    correct_ans = q.get("answer")
+                    question_details = q
                     qid = q.get("questionId")
                     break
 
-        is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
+        if not question_details:
+            results.append(OrderedDict([
+                ("questionId", qid),
+                ("question", qtext),
+                ("question_type", "unknown"),
+                ("your_answer", user_ans),
+                ("correct_answer", None),
+                ("is_correct", False),
+                ("status", "question_not_found")
+            ]))
+            continue
 
-        if is_correct:
-            total_correct += 1
+        question_type = question_details.get("question_type", "MCQ").upper()
 
-        results.append(OrderedDict([
-            ("questionId", qid),
-            ("your_answer", user_ans),
-            ("correct_answer", correct_ans),
-            ("is_correct", is_correct)
-        ]))
+        if question_type == "MCQ":
+            # ✅ MCQ: Check answer immediately
+            total_mcq += 1
+            correct_ans = question_details.get("answer")
+            is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
 
-    # 🧮 Calculate score
-    score = round((total_correct / totalQuestions) * 100, 2) if totalQuestions > 0 else 0.0
+            if is_correct:
+                total_correct += 1
+                mcq_correct += 1
 
-    # 💾 Store submission attempt in Qdrant or DB
+            results.append(OrderedDict([
+                ("questionId", qid),
+                ("question", question_details.get("question", "")),
+                ("question_type", "MCQ"),
+                ("your_answer", user_ans),
+                ("correct_answer", correct_ans),
+                ("is_correct", is_correct),
+                ("status", "graded")
+            ]))
+
+        else:  # DESCRIPTIVE
+            # ⏳ Descriptive: Store answer, defer grading
+            total_descriptive += 1
+            descriptive_question_ids.append(qid)
+            knowledge_base = question_details.get("knowledge_base", "")
+
+            results.append(OrderedDict([
+                ("questionId", qid),
+                ("question", question_details.get("question", "")),
+                ("question_type", "DESCRIPTIVE"),
+                ("your_answer", user_ans),
+                ("correct_answer", knowledge_base),
+                ("is_correct", None),
+                ("ai_score", None),
+                ("status", "pending_grading")
+            ]))
+
+    # 🧮 Calculate preliminary score (only from MCQs)
+    if totalQuestions > 0:
+        preliminary_score = round((total_correct / totalQuestions) * 100, 2)
+    else:
+        preliminary_score = 0.0
+
+    # 💾 Store submission attempt
     is_stored, attemptId = store_submitted_test(
         userId=userId,
         testId=testId,
@@ -719,9 +769,14 @@ def submit_test():
         totalTime=totalTime,
         submittedAt=submittedAt,
         detailed_results=results,
-        score=score,
+        score=preliminary_score,
         total_questions=totalQuestions,
-        total_correct=total_correct
+        total_correct=total_correct,
+        total_mcq=total_mcq,
+        total_descriptive=total_descriptive,
+        mcq_correct=mcq_correct,
+        grading_status="partial" if total_descriptive > 0 else "complete",
+        ai_feedback=None  # Will be filled by grade_descriptive endpoint
     )
 
     if not is_stored:
@@ -736,12 +791,19 @@ def submit_test():
         ("submittedAt", submittedAt),
         ("timeSpent", timeSpent),
         ("total_questions", totalQuestions),
+        ("total_mcq", total_mcq),
+        ("total_descriptive", total_descriptive),
+        ("mcq_correct", mcq_correct),
         ("total_correct", total_correct),
-        ("score", score),
+        ("score", preliminary_score),
+        ("grading_status", "partial" if total_descriptive > 0 else "complete"),
+        ("descriptive_questions_pending", descriptive_question_ids),
         ("detailed_results", results)
     ])
 
     return jsonify(response)
+
+
 
 @app.route("/tests/submitted/user/<userId>", methods=["GET"])
 def submitted_tests_history(userId):
@@ -1205,6 +1267,133 @@ def grade_test_analysis():
         "results": analysis_results
     }), 200
 
+
+
+
+
+
+@app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
+def grade_descriptive_questions(attemptId):
+    """
+    Grade all pending descriptive questions for a specific test attempt.
+    Stores the full AI feedback report for each question.
+    Frontend should call this immediately after /tests/submit if there are descriptive questions.
+    """
+    try:
+        # Fetch the submission
+        results = client.retrieve(
+            collection_name=COLLECTION_SUBMITTED,
+            ids=[attemptId],
+            with_payload=True,
+            with_vectors=False
+        )
+
+        if not results:
+            return jsonify({"error": "Submission not found"}), 404
+
+        payload = _extract_payload(results[0])
+        detailed_results = json.loads(payload.get("detailed_results", "[]"))
+
+        # This will store the full AI feedback for each descriptive question
+        ai_feedback = {}
+
+        total_descriptive_score = 0
+        graded_count = 0
+
+        # Process each descriptive question
+        for result in detailed_results:
+            if result.get("question_type") == "DESCRIPTIVE" and result.get("status") == "pending_grading":
+                question_id = result.get("questionId")
+                student_answer = result.get("your_answer", "")
+
+                # Fetch context for grading
+                context = fetch_question_context(question_id)
+                if not context:
+                    result["status"] = "grading_error"
+                    result["error"] = "Context not found"
+                    continue
+
+                # Prepare data for AI grading
+                combined_kb = f"Passage: {context['passage']}\n\nSource Info: {context['knowledge_base']}"
+                question_text = context['question']
+
+                try:
+                    # Call grading API - this returns the full report
+                    report = get_grading_report(
+                        kb_text=combined_kb,
+                        question_text=question_text,
+                        answer_text=student_answer
+                    )
+
+                    print(f"\n[DEBUG] AI Grading Report for {question_id}:")
+                    print(json.dumps(report, indent=2))
+
+                    # Extract score from the report
+                    ai_score = float(report.get("total_score", 0))
+
+                    # Store the FULL AI feedback report
+                    ai_feedback[question_id] = report
+
+                    # Update the result with AI grading info
+                    result["ai_score"] = ai_score
+                    result["status"] = "graded"
+
+                    # Determine if answer is correct based on score threshold
+                    # You can adjust this threshold (currently 6 out of 10)
+                    score_threshold = 6.0
+                    result["is_correct"] = ai_score >= score_threshold
+
+                    total_descriptive_score += ai_score
+                    graded_count += 1
+
+                except Exception as e:
+                    print(f"[ERROR] Grading failed for {question_id}: {e}")
+                    result["status"] = "grading_error"
+                    result["error"] = str(e)
+
+        # Recalculate total score
+        total_questions = int(payload.get("total_questions", 0))
+        mcq_correct = int(payload.get("mcq_correct", 0))
+
+        # Count descriptive questions considered correct
+        descriptive_correct = sum(1 for r in detailed_results
+                                  if r.get("question_type") == "DESCRIPTIVE"
+                                  and r.get("is_correct") == True)
+
+        total_correct = mcq_correct + descriptive_correct
+        final_score = round((total_correct / total_questions) * 100, 2) if total_questions > 0 else 0.0
+
+        # Calculate average descriptive score (out of 10)
+        descriptive_average = round(total_descriptive_score / graded_count, 2) if graded_count > 0 else 0
+
+        # Update the submission with complete grading
+        updated_payload = payload.copy()
+        updated_payload["detailed_results"] = json.dumps(detailed_results)
+        updated_payload["total_correct"] = total_correct
+        updated_payload["score"] = final_score
+        updated_payload["grading_status"] = "complete"
+        updated_payload["descriptive_average_score"] = descriptive_average
+        updated_payload["ai_feedback"] = json.dumps(ai_feedback)  # 🟢 Store full AI feedback
+
+        vec = embed(f"submitted_test:{payload['testId']}:{attemptId}")[0]
+        p = models.PointStruct(id=attemptId, vector=vec, payload=updated_payload)
+        client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
+
+        return jsonify({
+            "status": "success",
+            "attemptId": attemptId,
+            "final_score": final_score,
+            "total_correct": total_correct,
+            "grading_status": "complete",
+            "descriptive_average_score": descriptive_average,
+            "graded_count": graded_count,
+            "ai_feedback": ai_feedback,  # Return full feedback to frontend
+            "detailed_results": detailed_results
+        })
+
+    except Exception as e:
+        print(f"[ERROR] grade_descriptive_questions: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
