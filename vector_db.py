@@ -410,6 +410,7 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("options", json.dumps(mcq.get("options", {}))),
             # 🟢 ADDED: knowledge_base field added here
             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
+            ("question_type", mcq.get("question_type","")),
             ("answer", canonical_answer),
             ("documentIndex", i)
         ])
@@ -527,7 +528,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
                 "options", "answer", "passage", "noise", "documentIndex",
-                "predicted_subject", "predicted_concept", "knowledge_base"
+                "predicted_subject", "predicted_concept", "knowledge_base", "question_type"
             ]
 
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
