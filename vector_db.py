@@ -20,6 +20,7 @@ COLLECTION_MCQ = "mcq_collection"
 COLLECTION_QUESTIONS = "questions_collection"
 COLLECTION_TEST_SESSIONS = "test_sessions_collection"
 COLLECTION_SUBMITTED = "submitted_tests_collection"
+COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 
@@ -61,19 +62,42 @@ def ensure_collections():
             vectors_config=vector_params
         )
 
+    if COLLECTION_SUBSCRIPTIONS not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_SUBSCRIPTIONS,
+            vectors_config=vector_params
+        )
+
+
     # ---- ADD PAYLOAD INDEXES (same as before) ----
-    def _safe_index(col, field):
+    # def _safe_index(col, field):
+    #     try:
+    #         client.create_payload_index(
+    #             collection_name=col,
+    #             field_name=field,
+    #             field_schema=models.PayloadSchemaType.KEYWORD
+    #         )
+    #     except Exception:
+    #         pass
+
+    # ---- ADD PAYLOAD INDEXES ----
+    def _safe_index(col, field, schema=models.PayloadSchemaType.KEYWORD):  # Added 'schema' with a default
         try:
             client.create_payload_index(
                 collection_name=col,
                 field_name=field,
-                field_schema=models.PayloadSchemaType.KEYWORD
+                field_schema=schema  # Use the passed schema here
             )
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Index already exists or error for {field}: {e}")
             pass
 
     _safe_index(COLLECTION_MCQ, "generatedQAId")
     _safe_index(COLLECTION_MCQ, "userId")
+
+    # Add this line with your other _safe_index calls (around line 76):
+    _safe_index(COLLECTION_MCQ, "public", models.PayloadSchemaType.BOOL)
+
 
     _safe_index(COLLECTION_QUESTIONS, "generatedQAId")
     _safe_index(COLLECTION_QUESTIONS, "userId")
@@ -84,6 +108,11 @@ def ensure_collections():
 
     _safe_index(COLLECTION_SUBMITTED, "userId")
     _safe_index(COLLECTION_SUBMITTED, "testId")
+
+    # Add index for fast lookup by User ID
+    _safe_index(COLLECTION_SUBSCRIPTIONS, "userId")
+    _safe_index(COLLECTION_SUBSCRIPTIONS, "generatedQAId")
+
 
 
 ensure_collections()
@@ -1673,3 +1702,121 @@ def subscribe_to_qbank(userId, generatedQAId):
     )
 
 
+def add_subscription_record(userId, generatedQAId):
+    """Link a user to a specific question bank."""
+    sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{userId}_{generatedQAId}"))
+
+    payload = {
+        "userId": str(userId).strip().lower(),
+        "generatedQAId": generatedQAId,
+        "subscribedAt": datetime.now().isoformat(),
+    }
+
+    client.upsert(
+        collection_name=COLLECTION_SUBSCRIPTIONS,
+        points=[models.PointStruct(
+            id=sub_id,
+            vector=[0.0] * VECTOR_DIM,
+            payload=payload
+        )]
+    )
+    return sub_id
+
+
+
+
+def fetch_subscribed_questions(userId):
+    userIdClean = str(userId).strip().lower()
+
+    # 1. Find all bank IDs the user has access to
+    subs = client.scroll(
+        collection_name=COLLECTION_SUBSCRIPTIONS,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+        ),
+        limit=100
+    )[0]
+
+    qbank_ids = [s.payload["generatedQAId"] for s in subs]
+    if not qbank_ids:
+        return []
+
+    # 2. Fetch questions from the Questions Collection belonging to these banks
+    questions, _ = client.scroll(
+        collection_name=COLLECTION_QUESTIONS,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=qbank_ids))]
+        ),
+        limit=500,
+        with_payload=True
+    )
+
+    return [q.payload for q in questions]
+
+
+# vector_db.py
+
+def fetch_public_marketplace():
+    """Fetches all curated banks with question counts."""
+    filt = models.Filter(
+        must=[models.FieldCondition(key="public", match=models.MatchValue(value=True))]
+    )
+
+    banks, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=filt,
+        limit=100,
+        with_payload=True
+    )
+
+    results = []
+    for b in banks:
+        gen_id = b.payload.get("generatedQAId")
+
+        # Get count for each public bank
+        count = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+            )
+        ).count
+
+        results.append({
+            "generatedQAId": gen_id,
+            "title": b.payload.get("title"),
+            "description": b.payload.get("description"),
+            "totalQuestions": count,  # Added this
+            "isPublic": True,
+            "canEdit": False
+        })
+    return results
+
+
+def toggle_bank_public_status(generatedQAId: str, is_public: bool):
+    """Toggle the public flag for a question bank."""
+    try:
+        results = client.retrieve(
+            collection_name=COLLECTION_MCQ,
+            ids=[generatedQAId],
+            with_payload=True
+        )
+
+        if not results:
+            return False
+
+        payload = _extract_payload(results[0])
+        payload["public"] = is_public
+
+        vec = embed(f"{payload.get('title', '')} {payload.get('description', '')}")[0]
+        client.upsert(
+            collection_name=COLLECTION_MCQ,
+            points=[models.PointStruct(
+                id=generatedQAId,
+                vector=vec,
+                payload=payload
+            )]
+        )
+        return True
+    except Exception as e:
+        print(f"[ERROR] toggle_bank_public_status: {e}")
+        return False
