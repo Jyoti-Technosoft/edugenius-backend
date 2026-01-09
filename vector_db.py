@@ -772,69 +772,133 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
     return [record]
 
 
+#
+# def fetch_question_banks_metadata(userId):
+#     results = []
+#     next_offset = None
+#
+#     while True:
+#         banks, next_offset = client.scroll(
+#             collection_name=COLLECTION_MCQ,
+#             scroll_filter=models.Filter(
+#                 must=[
+#                     models.FieldCondition(
+#                         key="userId",
+#                         match=models.MatchValue(value=userId)
+#                     )
+#                 ]
+#             ),
+#             limit=100,
+#             offset=next_offset
+#         )
+#
+#         if not banks:
+#             break
+#
+#         for bank in banks:
+#             payload = bank.payload or {}
+#             generatedQAId = bank.id
+#
+#             # 🔢 Always fresh question count
+#             count = client.count(
+#                 collection_name=COLLECTION_QUESTIONS,
+#                 count_filter=models.Filter(
+#                     must=[
+#                         models.FieldCondition(
+#                             key="generatedQAId",
+#                             match=models.MatchValue(value=generatedQAId)
+#                         )
+#                     ]
+#                 )
+#             )
+#
+#             # 🏷️ Compute tags dynamically
+#             tags = compute_subject_tags_for_bank(generatedQAId)
+#
+#             results.append({
+#                 "generatedQAId": generatedQAId,
+#                 "title": payload.get("title", ""),
+#                 "description": payload.get("description", ""),
+#                 "createdAt": payload.get("createdAt"),
+#                 "answerFound": payload.get("answerFound", False),
+#                 "totalQuestions": count.count,
+#                 "tags": tags
+#             })
+#
+#         if next_offset is None:
+#             break
+#
+#     return results
 
-def fetch_question_banks_metadata(userId):
+
+def fetch_user_dashboard_metadata(userId: str):
+    """
+    Fetches a unified list of QBanks for the user's dashboard:
+    1. QBanks they created (Owners).
+    2. QBanks they subscribed to (Downloads).
+    """
+    userIdClean = str(userId).strip().lower()
+
+    # --- Step 1: Get all Subscribed Bank IDs ---
+    sub_hits = client.scroll(
+        collection_name=COLLECTION_SUBSCRIPTIONS,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+        ),
+        limit=1000,
+        with_payload=True
+    )[0]
+    subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+
+    # --- Step 2: Query MCQ Collection for Owned OR Subscribed Banks ---
+    # We use the 'should' clause for an 'OR' logic
+    merged_filter = models.Filter(
+        should=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+            models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
+        ]
+    )
+
+    banks, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=merged_filter,
+        limit=500,
+        with_payload=True
+    )
+
     results = []
-    next_offset = None
+    for bank in banks:
+        payload = bank.payload or {}
+        gen_id = payload.get("generatedQAId")
 
-    while True:
-        banks, next_offset = client.scroll(
-            collection_name=COLLECTION_MCQ,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="userId",
-                        match=models.MatchValue(value=userId)
-                    )
-                ]
-            ),
-            limit=100,
-            offset=next_offset
-        )
+        # Determine Permissions
+        # If the user is NOT the owner, it's read-only
+        is_owner = payload.get("userId") == userIdClean
 
-        if not banks:
-            break
-
-        for bank in banks:
-            payload = bank.payload or {}
-            generatedQAId = bank.id
-
-            # 🔢 Always fresh question count
-            count = client.count(
-                collection_name=COLLECTION_QUESTIONS,
-                count_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="generatedQAId",
-                            match=models.MatchValue(value=generatedQAId)
-                        )
-                    ]
-                )
+        # Fresh Count from Questions Collection
+        count = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
             )
+        ).count
 
-            # 🏷️ Compute tags dynamically
-            tags = compute_subject_tags_for_bank(generatedQAId)
+        # Get top subject tags
+        tags = compute_subject_tags_for_bank(gen_id)
 
-            results.append({
-                "generatedQAId": generatedQAId,
-                "title": payload.get("title", ""),
-                "description": payload.get("description", ""),
-                "createdAt": payload.get("createdAt"),
-                "answerFound": payload.get("answerFound", False),
-                "totalQuestions": count.count,
-                "tags": tags
-            })
-
-        if next_offset is None:
-            break
+        results.append({
+            "generatedQAId": gen_id,
+            "title": payload.get("title", ""),
+            "description": payload.get("description", ""),
+            "createdAt": payload.get("createdAt"),
+            "totalQuestions": count,
+            "tags": tags,
+            "isPublic": payload.get("public", False),
+            "canEdit": is_owner,  # UI uses this to show/hide Edit/Delete buttons
+            "isDownloaded": gen_id in subscribed_ids
+        })
 
     return results
-
-
-
-
-
-
 
 
 from collections import Counter
@@ -1582,3 +1646,30 @@ def fetch_question_context(questionId: str):
     except Exception as e:
         print(f"[ERROR] fetch_question_context error: {e}")
         return None
+
+
+
+
+
+COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
+
+
+def subscribe_to_qbank(userId, generatedQAId):
+    """Marks a public QBank as 'Downloaded' for a specific user."""
+    # Use a deterministic UUID based on User + Bank so they can't subscribe twice
+    sub_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{userId}_{generatedQAId}"))
+
+    payload = {
+        "userId": str(userId).strip().lower(),
+        "generatedQAId": generatedQAId,
+        "downloadedAt": datetime.now().isoformat(),
+        "is_reference": True  # Metadata to indicate it's a downloaded copy
+    }
+
+    # We use a dummy vector for subscriptions as we usually query by userId
+    client.upsert(
+        collection_name=COLLECTION_SUBSCRIPTIONS,
+        points=[models.PointStruct(id=sub_id, vector=[0.0] * VECTOR_DIM, payload=payload)]
+    )
+
+
