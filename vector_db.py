@@ -350,18 +350,134 @@ def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]
 
 
 
+#
+# def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
+#     userIdClean = str(userId).strip().lower()
+#     generatedQAId = str(uuid.uuid4())
+#
+#     metadata_for_bank = {
+#         "userId": userIdClean,
+#         "title": title,
+#         "generatedQAId": generatedQAId,
+#         "description": description,
+#         "file_name": pdf_file,
+#         "createdAt": createdAt
+#     }
+#
+#     bank_vector = embed(f"{title} {description}")[0]
+#
+#     question_points = []
+#     all_have_answers = True
+#     BATCH_SIZE = 256
+#
+#     # --- Step 1: Process and Batch Questions ---
+#     for i, mcq in enumerate(mcqs):
+#         mcq = clean_mcq_text(mcq)
+#
+#         # Get image data
+#         image_fields, mcq_cleaned = get_image_data(mcq)
+#
+#         # --- Answer Processing ---
+#         raw_answer = mcq.get("answer", "")
+#         normalized = normalize_text(raw_answer)
+#
+#         if is_invalid_answer(normalized):
+#             canonical_answer = ""
+#         else:
+#             options = mcq.get("options", {}) or {}
+#             parts = split_multi_answers(normalized)
+#             mapped_keys = [
+#                 map_answer_to_option(normalize_text(part), options)
+#                 for part in parts
+#                 if map_answer_to_option(normalize_text(part), options)
+#             ]
+#             canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
+#
+#         if not canonical_answer:
+#             all_have_answers = False
+#
+#         # --- ID & Index Assignment ---
+#         questionId = str(uuid.uuid4())
+#
+#         # --- Payload Construction ---
+#         q_meta = OrderedDict([
+#             ("questionId", questionId),
+#             ("generatedQAId", generatedQAId),
+#             ("userId", userIdClean),
+#             ("question", mcq.get("question", "")),
+#             ("noise", mcq.get("noise", "")),
+#             ("passage", mcq.get("passage") or ""),
+#             ("options", json.dumps(mcq.get("options", {}))),
+#             # 🟢 ADDED: knowledge_base field added here
+#             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
+#             ("question_type", mcq.get("question_type","")),
+#             ("answer", canonical_answer),
+#             ("documentIndex", i)
+#         ])
+#
+#         # Merge image fields
+#         q_meta.update(image_fields)
+#
+#         pred_sub = mcq.get("predicted_subject", {})
+#         pred_con = mcq.get("predicted_concept", {})
+#
+#         q_meta["predicted_subject"] = OrderedDict([
+#             ("label", pred_sub.get("label", "")),
+#             ("confidence", pred_sub.get("confidence", 0))
+#         ])
+#
+#         q_meta["predicted_concept"] = OrderedDict([
+#             ("label", pred_con.get("label", "")),
+#             ("confidence", pred_con.get("confidence", 0))
+#         ])
+#
+#         # --- Vector & Point Creation ---
+#         q_vec = embed(mcq.get("question", "") or "")[0]
+#         point = models.PointStruct(
+#             id=questionId,
+#             vector=q_vec,
+#             payload=_to_payload_for_question(q_meta)
+#         )
+#         question_points.append(point)
+#
+#         # --- Batch Upsert ---
+#         if len(question_points) >= BATCH_SIZE:
+#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
+#             question_points = []
+#
+#     if question_points:
+#         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
+#
+#     # --- Step 2: Bank-level metadata storage ---
+#     metadata_for_bank["answerFound"] = all_have_answers
+#     bank_point = models.PointStruct(
+#         id=generatedQAId,
+#         vector=bank_vector,
+#         payload=_to_payload_for_bank(metadata_for_bank)
+#     )
+#     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+#
+#     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
+#     print(f"[INFO] All answers found: {all_have_answers}")
+#     return generatedQAId, all_have_answers
+#
 
-def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
+
+
+
+def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
     userIdClean = str(userId).strip().lower()
     generatedQAId = str(uuid.uuid4())
 
+    # --- 1. Added "public" attribute to Bank Metadata ---
     metadata_for_bank = {
         "userId": userIdClean,
         "title": title,
         "generatedQAId": generatedQAId,
         "description": description,
         "file_name": pdf_file,
-        "createdAt": createdAt
+        "createdAt": createdAt,
+        "public": is_public  # New field (Boolean)
     }
 
     bank_vector = embed(f"{title} {description}")[0]
@@ -370,11 +486,8 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     all_have_answers = True
     BATCH_SIZE = 256
 
-    # --- Step 1: Process and Batch Questions ---
     for i, mcq in enumerate(mcqs):
         mcq = clean_mcq_text(mcq)
-
-        # Get image data
         image_fields, mcq_cleaned = get_image_data(mcq)
 
         # --- Answer Processing ---
@@ -396,10 +509,9 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
         if not canonical_answer:
             all_have_answers = False
 
-        # --- ID & Index Assignment ---
         questionId = str(uuid.uuid4())
 
-        # --- Payload Construction ---
+        # --- 2. Added "difficulty" attribute to Question Payload ---
         q_meta = OrderedDict([
             ("questionId", questionId),
             ("generatedQAId", generatedQAId),
@@ -408,14 +520,14 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("noise", mcq.get("noise", "")),
             ("passage", mcq.get("passage") or ""),
             ("options", json.dumps(mcq.get("options", {}))),
-            # 🟢 ADDED: knowledge_base field added here
             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
             ("question_type", mcq.get("question_type","")),
             ("answer", canonical_answer),
+            # New Field: Defaults to "medium" if not provided in mcq object
+            ("difficulty", mcq.get("difficulty", "medium")),
             ("documentIndex", i)
         ])
 
-        # Merge image fields
         q_meta.update(image_fields)
 
         pred_sub = mcq.get("predicted_subject", {})
@@ -431,7 +543,6 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
             ("confidence", pred_con.get("confidence", 0))
         ])
 
-        # --- Vector & Point Creation ---
         q_vec = embed(mcq.get("question", "") or "")[0]
         point = models.PointStruct(
             id=questionId,
@@ -440,7 +551,6 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
         )
         question_points.append(point)
 
-        # --- Batch Upsert ---
         if len(question_points) >= BATCH_SIZE:
             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
             question_points = []
@@ -448,7 +558,6 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     if question_points:
         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
 
-    # --- Step 2: Bank-level metadata storage ---
     metadata_for_bank["answerFound"] = all_have_answers
     bank_point = models.PointStruct(
         id=generatedQAId,
@@ -460,7 +569,6 @@ def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
     print(f"[INFO] All answers found: {all_have_answers}")
     return generatedQAId, all_have_answers
-
 
 
 
@@ -528,7 +636,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
                 "options", "answer", "passage", "noise", "documentIndex",
-                "predicted_subject", "predicted_concept", "knowledge_base", "question_type"
+                "predicted_subject", "predicted_concept", "knowledge_base", "question_type", "difficulty"
             ]
 
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
@@ -632,6 +740,9 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
         return results
 
     return []
+
+
+
 
 def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
     records = fetch_mcqs(generatedQAId=generatedQAId, page=1, limit=1000)
