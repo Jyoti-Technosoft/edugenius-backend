@@ -831,7 +831,7 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
 #     return results
 
 
-def fetch_user_dashboard_metadata(userId: str):
+def fetch_question_banks_metadata(userId: str):
     """
     Fetches a unified list of QBanks for the user's dashboard:
     1. QBanks they created (Owners).
