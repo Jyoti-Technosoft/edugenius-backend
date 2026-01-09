@@ -12,6 +12,30 @@ import random
 # from gradio_api import call_layoutlm_api
 from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ADMIN_USER_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"
+
+
+def is_admin(user_id):
+    return str(user_id).strip().lower() == ADMIN_USER_ID.lower()
+
+
 """
 ===========================================================
 
@@ -38,7 +62,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace
 
 
 from werkzeug.utils import secure_filename
@@ -1513,6 +1537,99 @@ def grade_descriptive_questions(attemptId):
     except Exception as e:
         print(f"[ERROR] grade_descriptive_questions: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
+@app.route("/admin/subscriptions/assign", methods=["POST"])
+def assign_subscription():
+    data = request.json
+    admin_id = data.get("adminId")  # Use this to check permissions
+    target_user_id = data.get("userId")
+    qbank_id = data.get("generatedQAId")
+
+    # TODO: Add your logic here to check if admin_id has 'special permissions'
+    # if not is_admin(admin_id): return jsonify({"error": "Unauthorized"}), 403
+
+    try:
+        sub_id = add_subscription_record(target_user_id, qbank_id)
+        return jsonify({"message": "Assigned successfully", "subscriptionId": sub_id}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
+@app.route("/user/subscriptions/questions", methods=["GET"])
+def get_my_subscribed_content():
+    user_id = request.args.get("userId")
+    if not user_id:
+        return jsonify({"error": "userId required"}), 400
+
+    questions = fetch_subscribed_questions(user_id)
+    return jsonify({
+        "count": len(questions),
+        "questions": questions
+    })
+
+
+
+
+
+
+
+@app.route("/marketplace/download", methods=["POST"])
+def download_curated_bank():
+    data = request.json
+    user_id = data.get("userId")
+    qbank_id = data.get("generatedQAId")
+
+    if not user_id or not qbank_id:
+        return jsonify({"error": "Missing ID"}), 400
+
+    try:
+        # This adds the 'Subscription' record
+        sub_id = add_subscription_record(user_id, qbank_id)
+        return jsonify({"message": "Download successful", "id": sub_id}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/question-banks/<generatedQAId>/publish", methods=["PUT"])
+def publish_to_marketplace(generatedQAId):
+    data = request.json or {}
+    admin_id = data.get("adminId")
+    is_public = data.get("isPublic", True)
+
+    if not is_admin(admin_id):
+        return jsonify({"error": "Unauthorized"}), 403
+
+    success = toggle_bank_public_status(generatedQAId, is_public)
+
+    if success:
+        return jsonify({
+            "message": "Published to marketplace" if is_public else "Unpublished",
+            "isPublic": is_public
+        }), 200
+    else:
+        return jsonify({"error": "Failed to update"}), 500
+
+
+# API to view marketplace
+@app.route("/marketplace", methods=["GET"])
+def get_marketplace():
+    banks = fetch_public_marketplace()
+    return jsonify(banks), 200
+
+
+
+
+
+
+
 
 
 
