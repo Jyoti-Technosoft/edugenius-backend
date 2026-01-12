@@ -1595,52 +1595,89 @@ def update_test_session(testId, updated_metadata):
         print("update_test_session error:", e)
         return False
 
-def update_question_bank_metadata(generatedQAId: str, title: Optional[str] = None, description: Optional[str] = None):
-    """
-    Safely update only title and/or description for a question bank in Qdrant.
-    This *does not* overwrite or remove existing mcqs or other metadata fields.
-    Returns a dict: {"success": bool, "title_updated": bool, "description_updated": bool, "error": str (optional)}
-    """
-    result = {"success": False, "title_updated": False, "description_updated": False}
+# def update_question_bank_metadata(generatedQAId: str, title: Optional[str] = None, description: Optional[str] = None):
+#     """
+#     Safely update only title and/or description for a question bank in Qdrant.
+#     This *does not* overwrite or remove existing mcqs or other metadata fields.
+#     Returns a dict: {"success": bool, "title_updated": bool, "description_updated": bool, "error": str (optional)}
+#     """
+#     result = {"success": False, "title_updated": False, "description_updated": False}
+#     try:
+#         # Retrieve the bank point (client.retrieve returns a list)
+#         bank_points = client.retrieve(collection_name=COLLECTION_MCQ, ids=[generatedQAId], with_payload=True)
+#         if not bank_points or len(bank_points) == 0:
+#             return result
+#
+#         bank_point = bank_points[0]
+#         payload = _extract_payload(bank_point)
+#         if not payload:
+#             return result
+#
+#         updated = False
+#         if title is not None and payload.get("title") != title:
+#             payload["title"] = title
+#             result["title_updated"] = True
+#             updated = True
+#         if description is not None and payload.get("description") != description:
+#             payload["description"] = description
+#             result["description_updated"] = True
+#             updated = True
+#
+#         if not updated:
+#             result["success"] = True
+#             return result
+#
+#         # Recompute the embedding for the bank (optional but keeps vectors consistent)
+#         new_vec = embed(f"{payload.get('title','')} {payload.get('description','')}")[0]
+#
+#         # Upsert the point back with same id, new vector and merged payload
+#         p = models.PointStruct(id=generatedQAId, vector=new_vec, payload=payload)
+#         client.upsert(collection_name=COLLECTION_MCQ, points=[p], wait=True)
+#
+#         result["success"] = True
+#         return result
+#     except Exception as e:
+#         print("update_question_bank_metadata error:", e)
+#         result["error"] = str(e)
+#         return result
+
+
+# vector_db.py
+
+def update_question_bank_metadata(generatedQAId: str, title: str = None, description: str = None,
+                                  is_public: bool = None):
     try:
-        # Retrieve the bank point (client.retrieve returns a list)
-        bank_points = client.retrieve(collection_name=COLLECTION_MCQ, ids=[generatedQAId], with_payload=True)
-        if not bank_points or len(bank_points) == 0:
-            return result
+        results = client.retrieve(
+            collection_name=COLLECTION_MCQ,
+            ids=[generatedQAId],
+            with_payload=True
+        )
+        if not results:
+            return {"success": False}
 
-        bank_point = bank_points[0]
-        payload = _extract_payload(bank_point)
-        if not payload:
-            return result
+        payload = _extract_payload(results[0])
 
-        updated = False
-        if title is not None and payload.get("title") != title:
-            payload["title"] = title
-            result["title_updated"] = True
-            updated = True
-        if description is not None and payload.get("description") != description:
-            payload["description"] = description
-            result["description_updated"] = True
-            updated = True
+        # Update only if provided
+        if title is not None: payload["title"] = title
+        if description is not None: payload["description"] = description
+        if is_public is not None: payload["public"] = is_public  # <--- Save the toggle state
 
-        if not updated:
-            result["success"] = True
-            return result
+        # Create new vector based on updated text
+        vec = embed(f"{payload.get('title', '')} {payload.get('description', '')}")[0]
 
-        # Recompute the embedding for the bank (optional but keeps vectors consistent)
-        new_vec = embed(f"{payload.get('title','')} {payload.get('description','')}")[0]
-
-        # Upsert the point back with same id, new vector and merged payload
-        p = models.PointStruct(id=generatedQAId, vector=new_vec, payload=payload)
-        client.upsert(collection_name=COLLECTION_MCQ, points=[p], wait=True)
-
-        result["success"] = True
-        return result
+        client.upsert(
+            collection_name=COLLECTION_MCQ,
+            points=[models.PointStruct(id=generatedQAId, vector=vec, payload=payload)]
+        )
+        return {
+            "success": True,
+            "title_updated": title is not None,
+            "description_updated": description is not None,
+            "public_updated": is_public is not None
+        }
     except Exception as e:
-        print("update_question_bank_metadata error:", e)
-        result["error"] = str(e)
-        return result
-
+        print(f"[ERROR] update_question_bank_metadata: {e}")
+        return {"success": False}
 
 
 
@@ -1758,13 +1795,18 @@ def fetch_subscribed_questions(userId):
 
 def fetch_public_marketplace():
     """Fetches all curated banks with question counts."""
-    filt = models.Filter(
-        must=[models.FieldCondition(key="public", match=models.MatchValue(value=True))]
+
+    ADMIN_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"
+    search_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="public", match=models.MatchValue(value=True)),
+            models.FieldCondition(key="userId", match=models.MatchValue(value=ADMIN_ID))
+        ]
     )
 
     banks, _ = client.scroll(
         collection_name=COLLECTION_MCQ,
-        scroll_filter=filt,
+        scroll_filter=search_filter,
         limit=100,
         with_payload=True
     )
@@ -1820,3 +1862,28 @@ def toggle_bank_public_status(generatedQAId: str, is_public: bool):
     except Exception as e:
         print(f"[ERROR] toggle_bank_public_status: {e}")
         return False
+
+
+# vector_db.py
+
+# def fetch_public_question_banks():
+#     """Fetches only public banks that belong to the ADMIN."""
+#     ADMIN_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"  # Your admin ID
+#
+#     # Updated Filter: Must be public AND must be created by Admin
+#     search_filter = models.Filter(
+#         must=[
+#             models.FieldCondition(key="public", match=models.MatchValue(value=True)),
+#             models.FieldCondition(key="userId", match=models.MatchValue(value=ADMIN_ID))
+#         ]
+#     )
+#
+#     hits, _ = client.scroll(
+#         collection_name=COLLECTION_MCQ,
+#         scroll_filter=search_filter,
+#         limit=100,
+#         with_payload=True
+#     )
+#
+#     # Map results for the marketplace UI
+#     return [_extract_payload(h) for h in hits]
