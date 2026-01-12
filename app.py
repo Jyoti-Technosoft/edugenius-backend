@@ -887,10 +887,12 @@ def edit_question_bank(generatedQAId):
         edits = payload
         new_title = None
         new_description = None
+        is_public = None
     else:
         edits = payload.get("edits")
         new_title = payload.get("title")
         new_description = payload.get("description")
+        is_public = payload.get("public")
 
     metadata_update_status = {
         "title_updated": False,
@@ -904,7 +906,9 @@ def edit_question_bank(generatedQAId):
             metadata_update_status = update_question_bank_metadata(
                 generatedQAId=generatedQAId,
                 title=new_title,
-                description=new_description
+                description=new_description,
+                is_public=is_public
+
             )
 
             # Handle metadata update failure
