@@ -150,6 +150,7 @@ def upload_pdf():
 
     # 1. Validate inputs
     user_id = request.form.get("userId")
+    user_name = request.form.get("userName", "User")
     title = request.form.get("title")
     description = request.form.get("description")
     pdf_file = request.files.get("pdf")
@@ -191,7 +192,7 @@ def upload_pdf():
     print("[STEP] Storing Question Bank in vector database...")
     createdAtTimestamp = datetime.now().isoformat()
     stored_id, all_have_answers = store_mcqs(
-        user_id, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+        user_id,user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
     )
     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
 
@@ -200,6 +201,7 @@ def upload_pdf():
         json.dumps({
             "generatedQAId": stored_id,
             "userId": user_id,
+            "userName": user_name,
             "fileName": pdf_name,
             "createdAt": createdAtTimestamp,
             "answerFound": all_have_answers
