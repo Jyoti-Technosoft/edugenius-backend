@@ -1121,15 +1121,58 @@ def test_sessions_by_userId(userId):
 #     except Exception as e:
 #         print("store_submitted_test error:", e)
 #         return False
+#
+#
+# def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,
+#                          detailed_results, score, total_questions, total_correct,
+#                          total_mcq=0, total_descriptive=0, mcq_correct=0,
+#                          grading_status="complete", ai_feedback=None):
+#     """
+#     Store submitted test with support for both MCQ and Descriptive questions.
+#     ai_feedback: dict mapping questionId to full AI grading report
+#     """
+#     try:
+#         userIdClean = str(userId).strip().lower()
+#         attemptId = str(uuid.uuid4())
+#
+#         payload = {
+#             "attemptId": attemptId,
+#             "userId": userIdClean,
+#             "testId": testId,
+#             "testTitle": testTitle,
+#             "timeSpent": timeSpent,
+#             "totalTime": totalTime,
+#             "submittedAt": submittedAt,
+#             "score": score,
+#             "total_questions": total_questions,
+#             "total_correct": total_correct,
+#             "total_mcq": total_mcq,
+#             "total_descriptive": total_descriptive,
+#             "mcq_correct": mcq_correct,
+#             "grading_status": grading_status,
+#             "detailed_results": json.dumps(detailed_results),
+#             "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})  # 🟢 NEW FIELD
+#         }
+#
+#         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
+#         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
+#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
+#
+#         return True, attemptId
+#     except Exception as e:
+#         print("store_submitted_test error:", e)
+#         return False, None
 
 
 def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,
                          detailed_results, score, total_questions, total_correct,
                          total_mcq=0, total_descriptive=0, mcq_correct=0,
+                         subject_analysis=None, concept_analysis=None,
                          grading_status="complete", ai_feedback=None):
     """
-    Store submitted test with support for both MCQ and Descriptive questions.
-    ai_feedback: dict mapping questionId to full AI grading report
+    Store submitted test with support for metadata analysis.
+    subject_analysis: dict tracking performance per subject
+    concept_analysis: dict tracking performance per concept
     """
     try:
         userIdClean = str(userId).strip().lower()
@@ -1150,11 +1193,18 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "total_descriptive": total_descriptive,
             "mcq_correct": mcq_correct,
             "grading_status": grading_status,
+            # 🟢 NEW ANALYSIS FIELDS
+            "subject_analysis": subject_analysis if subject_analysis else {},
+            "concept_analysis": concept_analysis if concept_analysis else {},
+            # Store complex lists/dicts as JSON strings for maximum compatibility
+            # (Qdrant handles nested dicts, but stringifying ensures easy retrieval in all drivers)
             "detailed_results": json.dumps(detailed_results),
-            "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})  # 🟢 NEW FIELD
+            "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})
         }
 
+        # Generate a dummy or semantic vector for the submission entry
         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
+
         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
 
@@ -1225,17 +1275,68 @@ def submitted_tests_by_userId(userId):
     except Exception as e:
         print("submitted_tests_by_userId error:", e)
         return []
+#
+# def fetch_submitted_test_by_testId(testId):
+#     try:
+#         # 🔹 Use a filter instead of retrieve(), since attempts are stored by attemptId
+#         filt = models.Filter(
+#             must=[
+#                 models.FieldCondition(key="testId", match=models.MatchValue(value=testId))
+#             ]
+#         )
+#
+#         dummy_vector = [0.0] * VECTOR_DIM  # Placeholder since we only need payloads
+#         hits = client.search(
+#             collection_name=COLLECTION_SUBMITTED,
+#             query_vector=dummy_vector,
+#             query_filter=filt,
+#             limit=1000,
+#             with_payload=True
+#         )
+#
+#         if not hits:
+#             return None
+#
+#         attempts = []
+#         for h in hits:
+#             payload = _extract_payload(h)
+#             if not payload:
+#                 continue
+#
+#             # Decode detailed_results if JSON string
+#             if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
+#                 try:
+#                     payload["detailed_results"] = json.loads(payload["detailed_results"])
+#                 except Exception:
+#                     pass
+#
+#             # Ensure testId and attemptId are set
+#             payload["testId"] = payload.get("testId") or testId
+#             payload["attemptId"] = payload.get("attemptId") or _extract_id(h)
+#
+#             attempts.append(payload)
+#
+#         # 🔹 Sort attempts by submittedAt (latest first)
+#         attempts.sort(key=lambda x: x.get("submittedAt", ""), reverse=True)
+#
+#         return attempts
+#
+#     except Exception as e:
+#         print("fetch_submitted_test_by_testId error:", e)
+#         return None
+
+
 
 def fetch_submitted_test_by_testId(testId):
     try:
-        # 🔹 Use a filter instead of retrieve(), since attempts are stored by attemptId
+        # 🔹 Use a filter since attempts are stored by attemptId, not testId
         filt = models.Filter(
             must=[
                 models.FieldCondition(key="testId", match=models.MatchValue(value=testId))
             ]
         )
 
-        dummy_vector = [0.0] * VECTOR_DIM  # Placeholder since we only need payloads
+        dummy_vector = [0.0] * VECTOR_DIM  # Placeholder
         hits = client.search(
             collection_name=COLLECTION_SUBMITTED,
             query_vector=dummy_vector,
@@ -1253,20 +1354,32 @@ def fetch_submitted_test_by_testId(testId):
             if not payload:
                 continue
 
-            # Decode detailed_results if JSON string
+            # 1. Decode detailed_results (JSON String -> List)
             if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
                 try:
                     payload["detailed_results"] = json.loads(payload["detailed_results"])
                 except Exception:
-                    pass
+                    payload["detailed_results"] = []
 
-            # Ensure testId and attemptId are set
+            # 2. Decode ai_feedback (JSON String -> Dict)
+            if "ai_feedback" in payload and isinstance(payload["ai_feedback"], str):
+                try:
+                    payload["ai_feedback"] = json.loads(payload["ai_feedback"])
+                except Exception:
+                    payload["ai_feedback"] = {}
+
+            # 3. Ensure Analysis fields exist (Safety for older records)
+            # If Qdrant returns them as objects, these will remain objects.
+            payload["subject_analysis"] = payload.get("subject_analysis") or {}
+            payload["concept_analysis"] = payload.get("concept_analysis") or {}
+
+            # Ensure IDs are present
             payload["testId"] = payload.get("testId") or testId
             payload["attemptId"] = payload.get("attemptId") or _extract_id(h)
 
             attempts.append(payload)
 
-        # 🔹 Sort attempts by submittedAt (latest first)
+        # Sort attempts by submittedAt (latest first)
         attempts.sort(key=lambda x: x.get("submittedAt", ""), reverse=True)
 
         return attempts

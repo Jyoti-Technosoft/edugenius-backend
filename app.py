@@ -663,12 +663,178 @@ def test_history_by_userId(userId):
 #     return jsonify(response)
 
 
+# @app.route("/tests/submit", methods=["POST"])
+# def submit_test():
+#     """
+#     API to submit student answers, check correctness for MCQs,
+#     defer grading for Descriptive questions, calculate score, and store submission data.
+#     Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
+#     """
+#     data = request.get_json(silent=True) or {}
+#     userId = data.get("userId")
+#     testId = data.get("testId")
+#     testTitle = data.get("testTitle")
+#     timeSpent = data.get("timeSpent")
+#     totalTime = data.get("totalTime")
+#     answers = data.get("answers")
+#
+#     if not all([userId, testId, answers]):
+#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
+#     if not isinstance(answers, list):
+#         return jsonify({"error": "Answers must be a list"}), 400
+#
+#     submittedAt = datetime.now().isoformat()
+#
+#     # 🧠 Fetch original test data
+#     test_data = fetch_test_by_testId(testId)
+#     if not test_data:
+#         return jsonify({"error": "Test not found"}), 404
+#
+#     questions = test_data.get("questions", [])
+#     if isinstance(questions, str):
+#         try:
+#             questions = json.loads(questions)
+#         except Exception:
+#             questions = []
+#
+#     # Build lookup for questions
+#     question_map = {}
+#     for q in questions:
+#         qid = q.get("questionId")
+#         if qid:
+#             question_map[qid] = q
+#
+#     totalQuestions = len(question_map)
+#     total_correct = 0
+#     total_mcq = 0
+#     total_descriptive = 0
+#     mcq_correct = 0
+#     results = []
+#     descriptive_question_ids = []
+#
+#     # ✅ Process each submitted answer based on question type
+#     for ans in answers:
+#         qid = ans.get("questionId")
+#         qtext = ans.get("question")
+#         user_ans = ans.get("your_answer")
+#
+#         # Find the question details
+#         question_details = None
+#         if qid and qid in question_map:
+#             question_details = question_map.get(qid)
+#         elif qtext:
+#             for q in questions:
+#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
+#                     question_details = q
+#                     qid = q.get("questionId")
+#                     break
+#
+#         if not question_details:
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", qtext),
+#                 ("question_type", "unknown"),
+#                 ("your_answer", user_ans),
+#                 ("correct_answer", None),
+#                 ("is_correct", False),
+#                 ("status", "question_not_found")
+#             ]))
+#             continue
+#
+#         question_type = question_details.get("question_type", "MCQ").upper()
+#
+#         if question_type == "MCQ":
+#             # ✅ MCQ: Check answer immediately
+#             total_mcq += 1
+#             correct_ans = question_details.get("answer")
+#             is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
+#
+#             if is_correct:
+#                 total_correct += 1
+#                 mcq_correct += 1
+#
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", question_details.get("question", "")),
+#                 ("question_type", "MCQ"),
+#                 ("your_answer", user_ans),
+#                 ("correct_answer", correct_ans),
+#                 ("is_correct", is_correct),
+#                 ("status", "graded")
+#             ]))
+#
+#         else:  # DESCRIPTIVE
+#             # ⏳ Descriptive: Store answer, defer grading
+#             total_descriptive += 1
+#             descriptive_question_ids.append(qid)
+#             knowledge_base = question_details.get("knowledge_base", "")
+#
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", question_details.get("question", "")),
+#                 ("question_type", "DESCRIPTIVE"),
+#                 ("your_answer", user_ans),
+#                 ("correct_answer", knowledge_base),
+#                 ("is_correct", None),
+#                 ("ai_score", None),
+#                 ("status", "pending_grading")
+#             ]))
+#
+#     # 🧮 Calculate preliminary score (only from MCQs)
+#     if totalQuestions > 0:
+#         preliminary_score = round((total_correct / totalQuestions) * 100, 2)
+#     else:
+#         preliminary_score = 0.0
+#
+#     # 💾 Store submission attempt
+#     is_stored, attemptId = store_submitted_test(
+#         userId=userId,
+#         testId=testId,
+#         testTitle=testTitle,
+#         timeSpent=timeSpent,
+#         totalTime=totalTime,
+#         submittedAt=submittedAt,
+#         detailed_results=results,
+#         score=preliminary_score,
+#         total_questions=totalQuestions,
+#         total_correct=total_correct,
+#         total_mcq=total_mcq,
+#         total_descriptive=total_descriptive,
+#         mcq_correct=mcq_correct,
+#         grading_status="partial" if total_descriptive > 0 else "complete",
+#         ai_feedback=None  # Will be filled by grade_descriptive endpoint
+#     )
+#
+#     if not is_stored:
+#         return jsonify({"error": "Failed to store submission"}), 500
+#
+#     # 📦 Final response
+#     response = OrderedDict([
+#         ("attemptId", attemptId),
+#         ("userId", userId),
+#         ("testId", testId),
+#         ("testTitle", testTitle),
+#         ("submittedAt", submittedAt),
+#         ("timeSpent", timeSpent),
+#         ("total_questions", totalQuestions),
+#         ("total_mcq", total_mcq),
+#         ("total_descriptive", total_descriptive),
+#         ("mcq_correct", mcq_correct),
+#         ("total_correct", total_correct),
+#         ("score", preliminary_score),
+#         ("grading_status", "partial" if total_descriptive > 0 else "complete"),
+#         ("descriptive_questions_pending", descriptive_question_ids),
+#         ("detailed_results", results)
+#     ])
+#
+#     return jsonify(response)
+
+
 @app.route("/tests/submit", methods=["POST"])
 def submit_test():
     """
-    API to submit student answers, check correctness for MCQs,
-    defer grading for Descriptive questions, calculate score, and store submission data.
-    Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
+    Enhanced API to submit student answers.
+    Calculates overall score and breaks down performance by Subject and Concept.
     """
     data = request.get_json(silent=True) or {}
     userId = data.get("userId")
@@ -685,7 +851,7 @@ def submit_test():
 
     submittedAt = datetime.now().isoformat()
 
-    # 🧠 Fetch original test data
+    # 🧠 Fetch original test data to verify correct answers and metadata
     test_data = fetch_test_by_testId(testId)
     if not test_data:
         return jsonify({"error": "Test not found"}), 404
@@ -697,14 +863,10 @@ def submit_test():
         except Exception:
             questions = []
 
-    # Build lookup for questions
-    question_map = {}
-    for q in questions:
-        qid = q.get("questionId")
-        if qid:
-            question_map[qid] = q
+    # Build lookup for questions by ID
+    question_map = {q.get("questionId"): q for q in questions if q.get("questionId")}
 
-    totalQuestions = len(question_map)
+    totalQuestions = len(questions)
     total_correct = 0
     total_mcq = 0
     total_descriptive = 0
@@ -712,17 +874,21 @@ def submit_test():
     results = []
     descriptive_question_ids = []
 
-    # ✅ Process each submitted answer based on question type
+    # 📊 Performance Analysis Tracking
+    subject_analysis = {}  # { "Physics": {"total": 0, "correct": 0} }
+    concept_analysis = {}  # { "Equilibrium": {"total": 0, "correct": 0} }
+
+    # ✅ Process each submitted answer
     for ans in answers:
         qid = ans.get("questionId")
         qtext = ans.get("question")
         user_ans = ans.get("your_answer")
 
-        # Find the question details
-        question_details = None
-        if qid and qid in question_map:
-            question_details = question_map.get(qid)
-        elif qtext:
+        # Find the question details in the master map
+        question_details = question_map.get(qid)
+
+        # Fallback to text matching if ID is missing
+        if not question_details and qtext:
             for q in questions:
                 if qtext.strip().lower() == q.get("question", "").strip().lower():
                     question_details = q
@@ -733,29 +899,41 @@ def submit_test():
             results.append(OrderedDict([
                 ("questionId", qid),
                 ("question", qtext),
-                ("question_type", "unknown"),
-                ("your_answer", user_ans),
-                ("correct_answer", None),
-                ("is_correct", False),
                 ("status", "question_not_found")
             ]))
             continue
 
-        question_type = question_details.get("question_type", "MCQ").upper()
+        # Extract Subject and Concept Labels
+        subj_label = (question_details.get("predicted_subject") or {}).get("label", "General")
+        conc_label = (question_details.get("predicted_concept") or {}).get("label", "General")
+
+        # Initialize analysis containers
+        if subj_label not in subject_analysis:
+            subject_analysis[subj_label] = {"total": 0, "correct": 0}
+        if conc_label not in concept_analysis:
+            concept_analysis[conc_label] = {"total": 0, "correct": 0}
+
+        question_type = (question_details.get("question_type") or "MCQ").upper()
 
         if question_type == "MCQ":
-            # ✅ MCQ: Check answer immediately
             total_mcq += 1
+            subject_analysis[subj_label]["total"] += 1
+            concept_analysis[conc_label]["total"] += 1
+
             correct_ans = question_details.get("answer")
             is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
 
             if is_correct:
                 total_correct += 1
                 mcq_correct += 1
+                subject_analysis[subj_label]["correct"] += 1
+                concept_analysis[conc_label]["correct"] += 1
 
             results.append(OrderedDict([
                 ("questionId", qid),
                 ("question", question_details.get("question", "")),
+                ("subject", subj_label),
+                ("concept", conc_label),
                 ("question_type", "MCQ"),
                 ("your_answer", user_ans),
                 ("correct_answer", correct_ans),
@@ -764,29 +942,27 @@ def submit_test():
             ]))
 
         else:  # DESCRIPTIVE
-            # ⏳ Descriptive: Store answer, defer grading
             total_descriptive += 1
+            subject_analysis[subj_label]["total"] += 1
+            concept_analysis[conc_label]["total"] += 1
             descriptive_question_ids.append(qid)
-            knowledge_base = question_details.get("knowledge_base", "")
 
             results.append(OrderedDict([
                 ("questionId", qid),
                 ("question", question_details.get("question", "")),
+                ("subject", subj_label),
+                ("concept", conc_label),
                 ("question_type", "DESCRIPTIVE"),
                 ("your_answer", user_ans),
-                ("correct_answer", knowledge_base),
-                ("is_correct", None),
-                ("ai_score", None),
+                ("correct_answer", question_details.get("knowledge_base", "")),
+                ("is_correct", None),  # Pending AI grading
                 ("status", "pending_grading")
             ]))
 
-    # 🧮 Calculate preliminary score (only from MCQs)
-    if totalQuestions > 0:
-        preliminary_score = round((total_correct / totalQuestions) * 100, 2)
-    else:
-        preliminary_score = 0.0
+    # 🧮 Calculate preliminary score (from MCQs)
+    preliminary_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
 
-    # 💾 Store submission attempt
+    # 💾 Store submission attempt in DB
     is_stored, attemptId = store_submitted_test(
         userId=userId,
         testId=testId,
@@ -801,14 +977,15 @@ def submit_test():
         total_mcq=total_mcq,
         total_descriptive=total_descriptive,
         mcq_correct=mcq_correct,
-        grading_status="partial" if total_descriptive > 0 else "complete",
-        ai_feedback=None  # Will be filled by grade_descriptive endpoint
+        subject_analysis=subject_analysis,  # NEW
+        concept_analysis=concept_analysis,  # NEW
+        grading_status="partial" if total_descriptive > 0 else "complete"
     )
 
     if not is_stored:
         return jsonify({"error": "Failed to store submission"}), 500
 
-    # 📦 Final response
+    # 📦 Final response with full analysis
     response = OrderedDict([
         ("attemptId", attemptId),
         ("userId", userId),
@@ -816,14 +993,19 @@ def submit_test():
         ("testTitle", testTitle),
         ("submittedAt", submittedAt),
         ("timeSpent", timeSpent),
-        ("total_questions", totalQuestions),
-        ("total_mcq", total_mcq),
-        ("total_descriptive", total_descriptive),
-        ("mcq_correct", mcq_correct),
-        ("total_correct", total_correct),
         ("score", preliminary_score),
         ("grading_status", "partial" if total_descriptive > 0 else "complete"),
-        ("descriptive_questions_pending", descriptive_question_ids),
+        ("performance_report", {
+            "by_subject": subject_analysis,
+            "by_concept": concept_analysis
+        }),
+        ("stats", {
+            "total_questions": totalQuestions,
+            "total_mcq": total_mcq,
+            "total_descriptive": total_descriptive,
+            "mcq_correct": mcq_correct
+        }),
+        ("descriptive_pending", descriptive_question_ids),
         ("detailed_results", results)
     ])
 
