@@ -1932,3 +1932,53 @@ def update_user_metadata_in_qdrant(userId: str, new_username: str):
 
     print(f"[SUCCESS] Sync Complete. Updated {banks_updated} banks and {questions_updated} questions.")
     return True
+
+
+def fetch_community_marketplace(limit=20):
+    """
+    Fetches public banks created by non-admin users.
+    Excludes the hardcoded ADMIN_USER_ID.
+    """
+    from app import ADMIN_USER_ID  # Importing here to avoid circular imports if necessary
+
+    # Filter: public must be True AND userId must NOT be Admin
+    search_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="public", match=models.MatchValue(value=True))
+        ],
+        must_not=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=ADMIN_USER_ID))
+        ]
+    )
+
+    banks, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=search_filter,
+        limit=limit,
+        with_payload=True
+    )
+
+    results = []
+    for b in banks:
+        gen_id = b.payload.get("generatedQAId")
+
+        # Get count for each community bank
+        count = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+            )
+        ).count
+
+        results.append({
+            "generatedQAId": gen_id,
+            "title": b.payload.get("title") or "Untitled Bank",
+            "description": b.payload.get("description") or "",
+            "totalQuestions": count,
+            "userName": b.payload.get("userName") or "Community Member",
+            "userId": b.payload.get("userId"),
+            "isPublic": True,
+            "canEdit": False
+        })
+
+    return results
