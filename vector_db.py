@@ -920,6 +920,7 @@ def fetch_question_banks_metadata(userId: str):
         results.append({
             "generatedQAId": gen_id,
             "title": payload.get("title", ""),
+            "userName": payload.get("userName", ""),
             "description": payload.get("description", ""),
             "createdAt": payload.get("createdAt"),
             "totalQuestions": count,
