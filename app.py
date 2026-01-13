@@ -1636,6 +1636,8 @@ def get_marketplace():
 
 
 
+import threading
+
 @app.route("/user/update-username", methods=["POST"])
 def api_update_username():
     data = request.json
@@ -1645,13 +1647,18 @@ def api_update_username():
     if not user_id or not new_username:
         return jsonify({"error": "Missing data"}), 400
 
-    try:
+    # Start the heavy Qdrant update in the BACKGROUND
+    # This allows the API to return 200 OK immediately
+    thread = threading.Thread(
+        target=update_user_metadata_in_qdrant,
+        args=(user_id, new_username)
+    )
+    thread.start()
 
-        success = update_user_metadata_in_qdrant(user_id, new_username)
-        return jsonify({"message": "Username updated across all records", "success": success}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    return jsonify({
+        "message": "Update started in background",
+        "status": "processing"
+    }), 200
 
 
 
