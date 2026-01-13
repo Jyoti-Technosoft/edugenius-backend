@@ -494,19 +494,21 @@ def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]
 
 
 
-def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
+def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
     userIdClean = str(userId).strip().lower()
     generatedQAId = str(uuid.uuid4())
 
     # --- 1. Added "public" attribute to Bank Metadata ---
     metadata_for_bank = {
         "userId": userIdClean,
+        "userName": userName,
         "title": title,
         "generatedQAId": generatedQAId,
         "description": description,
         "file_name": pdf_file,
         "createdAt": createdAt,
         "public": is_public  # New field (Boolean)
+
     }
 
     bank_vector = embed(f"{title} {description}")[0]
@@ -665,7 +667,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
                 "options", "answer", "passage", "noise", "documentIndex",
-                "predicted_subject", "predicted_concept", "knowledge_base", "question_type", "difficulty"
+                "predicted_subject", "predicted_concept", "knowledge_base", "question_type", "difficulty", "userName"
             ]
 
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
@@ -925,6 +927,7 @@ def fetch_question_banks_metadata(userId: str):
             "isPublic": payload.get("public", False),
             "canEdit": is_owner,  # UI uses this to show/hide Edit/Delete buttons
             "isDownloaded": gen_id in subscribed_ids
+
         })
 
     return results
@@ -1864,26 +1867,61 @@ def toggle_bank_public_status(generatedQAId: str, is_public: bool):
         return False
 
 
-# vector_db.py
+def update_user_metadata_in_qdrant(userId: str, new_username: str):
+    """
+    Finds all points and updates userName using Bulk Upserts to prevent timeouts.
+    """
+    userIdClean = str(userId).strip().lower()
 
-# def fetch_public_question_banks():
-#     """Fetches only public banks that belong to the ADMIN."""
-#     ADMIN_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"  # Your admin ID
-#
-#     # Updated Filter: Must be public AND must be created by Admin
-#     search_filter = models.Filter(
-#         must=[
-#             models.FieldCondition(key="public", match=models.MatchValue(value=True)),
-#             models.FieldCondition(key="userId", match=models.MatchValue(value=ADMIN_ID))
-#         ]
-#     )
-#
-#     hits, _ = client.scroll(
-#         collection_name=COLLECTION_MCQ,
-#         scroll_filter=search_filter,
-#         limit=100,
-#         with_payload=True
-#     )
-#
-#     # Map results for the marketplace UI
-#     return [_extract_payload(h) for h in hits]
+    # 1. Prepare updates for MCQ Collection (Question Banks)
+    points, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+        ),
+        with_payload=True,
+        with_vectors=True
+    )
+
+    bank_updates = []
+    for point in points:
+        payload = point.payload
+        payload["userName"] = new_username
+        bank_updates.append(models.PointStruct(id=point.id, vector=point.vector, payload=payload))
+
+    if bank_updates:
+        client.upsert(collection_name=COLLECTION_MCQ, points=bank_updates)
+
+    # 2. Prepare updates for Questions Collection (Handles large amounts of data)
+    all_question_updates = []
+    next_offset = None
+
+    while True:
+        q_scroll, next_offset = client.scroll(
+            collection_name=COLLECTION_QUESTIONS,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+            ),
+            limit=100,  # Process in chunks
+            offset=next_offset,
+            with_payload=True,
+            with_vectors=True
+        )
+
+        for q_point in q_scroll:
+            payload = q_point.payload
+            payload["userName"] = new_username
+            all_question_updates.append(
+                models.PointStruct(id=q_point.id, vector=q_point.vector, payload=payload)
+            )
+
+        if not next_offset:
+            break
+
+    # Bulk Upsert all questions (using batches of 100)
+    if all_question_updates:
+        for i in range(0, len(all_question_updates), 100):
+            batch = all_question_updates[i: i + 100]
+            client.upsert(collection_name=COLLECTION_QUESTIONS, points=batch)
+
+    return True
