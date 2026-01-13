@@ -1868,60 +1868,66 @@ def toggle_bank_public_status(generatedQAId: str, is_public: bool):
 
 
 def update_user_metadata_in_qdrant(userId: str, new_username: str):
-    """
-    Finds all points and updates userName using Bulk Upserts to prevent timeouts.
-    """
-    userIdClean = str(userId).strip().lower()
+    print(f"[UPDATE] Starting global name sync for User: {userId} -> {new_username}")
 
-    # 1. Prepare updates for MCQ Collection (Question Banks)
-    points, _ = client.scroll(
-        collection_name=COLLECTION_MCQ,
-        scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-        ),
-        with_payload=True,
-        with_vectors=True
+    # We search for BOTH the raw ID and the lowercase ID to be safe
+    user_ids_to_check = list(set([str(userId).strip(), str(userId).strip().lower()]))
+
+    sync_filter = models.Filter(
+        should=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=uid))
+            for uid in user_ids_to_check
+        ]
     )
 
-    bank_updates = []
-    for point in points:
-        payload = point.payload
-        payload["userName"] = new_username
-        bank_updates.append(models.PointStruct(id=point.id, vector=point.vector, payload=payload))
-
-    if bank_updates:
-        client.upsert(collection_name=COLLECTION_MCQ, points=bank_updates)
-
-    # 2. Prepare updates for Questions Collection (Handles large amounts of data)
-    all_question_updates = []
+    # 1. Update MCQ Collection (Question Banks)
+    # Use a loop to ensure we catch EVERY bank, not just the first 10
     next_offset = None
+    banks_updated = 0
+    while True:
+        banks, next_offset = client.scroll(
+            collection_name=COLLECTION_MCQ,
+            scroll_filter=sync_filter,
+            limit=100,
+            offset=next_offset,
+            with_payload=True
+        )
+        for b in banks:
+            client.set_payload(
+                collection_name=COLLECTION_MCQ,
+                payload={"userName": new_username},
+                points=[b.id]
+            )
+            banks_updated += 1
+        if not next_offset:
+            break
 
+    # 2. Update Questions Collection
+    questions_updated = 0
+    next_offset = None
     while True:
         q_scroll, next_offset = client.scroll(
             collection_name=COLLECTION_QUESTIONS,
-            scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-            ),
-            limit=100,  # Process in chunks
+            scroll_filter=sync_filter,
+            limit=500,  # Higher limit for questions
             offset=next_offset,
-            with_payload=True,
-            with_vectors=True
+            with_payload=False  # We only need the IDs to update payload
         )
 
-        for q_point in q_scroll:
-            payload = q_point.payload
-            payload["userName"] = new_username
-            all_question_updates.append(
-                models.PointStruct(id=q_point.id, vector=q_point.vector, payload=payload)
-            )
+        if not q_scroll:
+            break
+
+        # Batch update payloads for performance
+        q_ids = [q.id for q in q_scroll]
+        client.set_payload(
+            collection_name=COLLECTION_QUESTIONS,
+            payload={"userName": new_username},
+            points=q_ids
+        )
+        questions_updated += len(q_ids)
 
         if not next_offset:
             break
 
-    # Bulk Upsert all questions (using batches of 100)
-    if all_question_updates:
-        for i in range(0, len(all_question_updates), 100):
-            batch = all_question_updates[i: i + 100]
-            client.upsert(collection_name=COLLECTION_QUESTIONS, points=batch)
-
+    print(f"[SUCCESS] Sync Complete. Updated {banks_updated} banks and {questions_updated} questions.")
     return True
