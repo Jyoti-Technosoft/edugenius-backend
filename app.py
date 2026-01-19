@@ -269,6 +269,7 @@ def upload_image():
 
     # 1. Validate inputs
     user_id = request.form.get("userId")
+    user_name = request.form.get("userName", "User")
     title = request.form.get("title")
     description = request.form.get("description")
     image_files = request.files.getlist("image")  # ✅ multiple images
@@ -310,7 +311,7 @@ def upload_image():
     print("[STEP] Storing Question Bank in vector database...")
     createdAtTimestamp = datetime.now().isoformat()
     stored_id = store_mcqs(
-        user_id, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
+        user_id, user_name, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
     )
     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
 
