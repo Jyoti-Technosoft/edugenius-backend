@@ -144,9 +144,139 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 #
 # ===============================
 
+# @app.route("/question-banks/upload", methods=["POST"])
+# def upload_pdf():
+#     print(f"\n[START] /create_question_bank request received")
+#
+#     # 1. Validate inputs
+#     user_id = request.form.get("userId")
+#     user_name = request.form.get("userName", "User")
+#     title = request.form.get("title")
+#     description = request.form.get("description")
+#     pdf_file = request.files.get("pdf")
+#
+#     print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
+#     if not pdf_file:
+#         return jsonify({"error": "PDF file not provided"}), 400
+#
+#     if not all([user_id, title, description]):
+#         return jsonify({"error": "userId, title, description are required"}), 400
+#
+#     # 2. Keep PDF in memory (no Drive)
+#     print("[STEP] Reading PDF into memory...")
+#     pdf_bytes = pdf_file.read()
+#     pdf_name = secure_filename(pdf_file.filename)
+#
+#     # 3. Directly call model
+#     print("[STEP] Calling LayoutLM model directly (no Drive)...")
+#     # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
+#     try:
+#
+#         final_data = latex_model(pdf_bytes, pdf_name)
+#     except Exception as e:
+#         print("[ERROR] latex_model failed → switching to YOLO model")
+#         print("Reason:", e)
+#         final_data = call_yolo_api(pdf_bytes, pdf_name)
+#
+#     # 4. Add index to MCQs
+#     indexed_mcqs = [
+#         {
+#             **mcq,
+#             "documentIndex": i,
+#             "questionId": str(uuid.uuid4())  # ✅ assign unique ID
+#         }
+#         for i, mcq in enumerate(final_data)
+#     ]
+#
+#     # 5. Store in vector DB
+#     print("[STEP] Storing Question Bank in vector database...")
+#     createdAtTimestamp = datetime.now().isoformat()
+#     stored_id, all_have_answers = store_mcqs(
+#         user_id,user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+#     )
+#     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
+#
+#     print("[END] Request complete\n")
+#     return Response(
+#         json.dumps({
+#             "generatedQAId": stored_id,
+#             "userId": user_id,
+#             "userName": user_name,
+#             "fileName": pdf_name,
+#             "createdAt": createdAtTimestamp,
+#             "answerFound": all_have_answers
+#         }, ensure_ascii=False),
+#         mimetype="application/json"
+#     )
+
+
+import threading
+import uuid
+import json
+from flask import Flask, request, jsonify, Response
+from datetime import datetime
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+
+# This acts as a temporary status tracker
+# In a real production app, use a database or Redis
+processing_tasks = {}
+
+
+def background_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+    """The heavy lifting happens here in a separate thread."""
+    try:
+        print(f"[THREAD START] Processing job: {job_id}")
+
+        # 3. Directly call model
+        print("[STEP] Calling LayoutLM model directly...")
+        try:
+            final_data = latex_model(pdf_bytes, pdf_name)
+        except Exception as e:
+            print("[ERROR] latex_model failed → switching to YOLO model")
+            print("Reason:", e)
+            final_data = call_yolo_api(pdf_bytes, pdf_name)
+
+        # 4. Add index to MCQs
+        indexed_mcqs = [
+            {
+                **mcq,
+                "documentIndex": i,
+                "questionId": str(uuid.uuid4())
+            }
+            for i, mcq in enumerate(final_data)
+        ]
+
+        # 5. Store in vector DB
+        print("[STEP] Storing Question Bank in vector database...")
+        createdAtTimestamp = datetime.now().isoformat()
+
+        # This is where your 2-minute delay happens
+        stored_id, all_have_answers = store_mcqs(
+            user_id, user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+        )
+
+        # SAVE THE RESULT so the status endpoint can find it
+        processing_tasks[job_id] = {
+            "status": "completed",
+            "generatedQAId": stored_id,
+            "userId": user_id,
+            "userName": user_name,
+            "fileName": pdf_name,
+            "createdAt": createdAtTimestamp,
+            "answerFound": all_have_answers
+        }
+        print(f"[THREAD SUCCESS] Job {job_id} stored with id={stored_id}")
+
+    except Exception as e:
+        print(f"[THREAD ERROR] Job {job_id} failed: {str(e)}")
+        processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+
+
 @app.route("/question-banks/upload", methods=["POST"])
 def upload_pdf():
-    print(f"\n[START] /create_question_bank request received")
+    print(f"\n[START] /question-banks/upload request received")
 
     # 1. Validate inputs
     user_id = request.form.get("userId")
@@ -155,59 +285,47 @@ def upload_pdf():
     description = request.form.get("description")
     pdf_file = request.files.get("pdf")
 
-    print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
     if not pdf_file:
         return jsonify({"error": "PDF file not provided"}), 400
 
     if not all([user_id, title, description]):
         return jsonify({"error": "userId, title, description are required"}), 400
 
-    # 2. Keep PDF in memory (no Drive)
-    print("[STEP] Reading PDF into memory...")
+    # 2. Prepare data for the thread
     pdf_bytes = pdf_file.read()
     pdf_name = secure_filename(pdf_file.filename)
+    job_id = str(uuid.uuid4())  # Unique ID for Flutter to track
 
-    # 3. Directly call model
-    print("[STEP] Calling LayoutLM model directly (no Drive)...")
-    # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
-    try:
+    # Initialize the status
+    processing_tasks[job_id] = {"status": "processing"}
 
-        final_data = latex_model(pdf_bytes, pdf_name)
-    except Exception as e:
-        print("[ERROR] latex_model failed → switching to YOLO model")
-        print("Reason:", e)
-        final_data = call_yolo_api(pdf_bytes, pdf_name)
-
-    # 4. Add index to MCQs
-    indexed_mcqs = [
-        {
-            **mcq,
-            "documentIndex": i,
-            "questionId": str(uuid.uuid4())  # ✅ assign unique ID
-        }
-        for i, mcq in enumerate(final_data)
-    ]
-
-    # 5. Store in vector DB
-    print("[STEP] Storing Question Bank in vector database...")
-    createdAtTimestamp = datetime.now().isoformat()
-    stored_id, all_have_answers = store_mcqs(
-        user_id,user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+    # 🚀 START THREAD
+    # We pass all the data the thread needs to finish the job
+    thread = threading.Thread(
+        target=background_task,
+        args=(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name)
     )
-    print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
+    thread.start()
 
-    print("[END] Request complete\n")
-    return Response(
-        json.dumps({
-            "generatedQAId": stored_id,
-            "userId": user_id,
-            "userName": user_name,
-            "fileName": pdf_name,
-            "createdAt": createdAtTimestamp,
-            "answerFound": all_have_answers
-        }, ensure_ascii=False),
-        mimetype="application/json"
-    )
+    # RETURN IMMEDIATELY
+    # Flutter gets this in 100ms and knows the work has started.
+    print(f"[INFO] Thread started. Returning jobId: {job_id}")
+    return jsonify({
+        "status": "processing",
+        "jobId": job_id,
+        "message": "File received and processing started."
+    }), 202
+
+
+@app.route("/question-banks/status/<job_id>", methods=["GET"])
+def get_status(job_id):
+    """Flutter will call this every 5-10 seconds to check if it's done."""
+    task = processing_tasks.get(job_id)
+
+    if not task:
+        return jsonify({"error": "Job not found"}), 404
+
+    return jsonify(task)
 
 
 
@@ -554,281 +672,8 @@ def test_history_by_userId(userId):
     return jsonify(test_history), 200
 
 
-#
-#
-# @app.route("/tests/submit", methods=["POST"])
-# def submit_test():
-#     """
-#     API to submit student answers, check correctness,
-#     calculate score, and store submission data.
-#     Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
-#     """
-#     data = request.get_json(silent=True) or {}
-#
-#     userId = data.get("userId")
-#     testId = data.get("testId")
-#     testTitle = data.get("testTitle")
-#     timeSpent = data.get("timeSpent")
-#     totalTime = data.get("totalTime")
-#     answers = data.get("answers")
-#
-#     if not all([userId, testId, answers]):
-#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
-#     if not isinstance(answers, list):
-#         return jsonify({"error": "Answers must be a list"}), 400
-#
-#     submittedAt = datetime.now().isoformat()
-#
-#     # 🧠 Fetch original test data (includes correct answers)
-#     test_data = fetch_test_by_testId(testId)
-#     if not test_data:
-#         return jsonify({"error": "Test not found"}), 404
-#
-#     questions = test_data.get("questions", [])
-#     if isinstance(questions, str):
-#         try:
-#             questions = json.loads(questions)
-#         except Exception:
-#             questions = []
-#
-#     # Build quick lookup of correct answers
-#     correct_map = {q.get("questionId"): q.get("answer") for q in questions}
-#
-#     totalQuestions = len(correct_map)
-#     total_correct = 0
-#     results = []
-#
-#     # ✅ Compare each submitted answer
-#     for ans in answers:
-#         qid = ans.get("questionId")
-#         qtext = ans.get("question")
-#         user_ans = ans.get("your_answer")
-#
-#         # Try to get correct answer using questionId first, then question text
-#         correct_ans = None
-#         if qid and qid in correct_map:
-#             correct_ans = correct_map.get(qid)
-#         elif qtext:
-#             for q in questions:
-#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
-#                     correct_ans = q.get("answer")
-#                     qid = q.get("questionId")
-#                     break
-#
-#         is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
-#
-#         if is_correct:
-#             total_correct += 1
-#
-#         results.append(OrderedDict([
-#             ("questionId", qid),
-#             ("your_answer", user_ans),
-#             ("correct_answer", correct_ans),
-#             ("is_correct", is_correct)
-#         ]))
-#
-#     # 🧮 Calculate score
-#     score = round((total_correct / totalQuestions) * 100, 2) if totalQuestions > 0 else 0.0
-#
-#     # 💾 Store submission attempt in Qdrant or DB
-#     is_stored, attemptId = store_submitted_test(
-#         userId=userId,
-#         testId=testId,
-#         testTitle=testTitle,
-#         timeSpent=timeSpent,
-#         totalTime=totalTime,
-#         submittedAt=submittedAt,
-#         detailed_results=results,
-#         score=score,
-#         total_questions=totalQuestions,
-#         total_correct=total_correct
-#     )
-#
-#     if not is_stored:
-#         return jsonify({"error": "Failed to store submission"}), 500
-#
-#     # 📦 Final response
-#     response = OrderedDict([
-#         ("attemptId", attemptId),
-#         ("userId", userId),
-#         ("testId", testId),
-#         ("testTitle", testTitle),
-#         ("submittedAt", submittedAt),
-#         ("timeSpent", timeSpent),
-#         ("total_questions", totalQuestions),
-#         ("total_correct", total_correct),
-#         ("score", score),
-#         ("detailed_results", results)
-#     ])
-#
-#     return jsonify(response)
 
 
-# @app.route("/tests/submit", methods=["POST"])
-# def submit_test():
-#     """
-#     API to submit student answers, check correctness for MCQs,
-#     defer grading for Descriptive questions, calculate score, and store submission data.
-#     Frontend sends: userId, testId, testTitle, timeSpent, totalTime, answers[]
-#     """
-#     data = request.get_json(silent=True) or {}
-#     userId = data.get("userId")
-#     testId = data.get("testId")
-#     testTitle = data.get("testTitle")
-#     timeSpent = data.get("timeSpent")
-#     totalTime = data.get("totalTime")
-#     answers = data.get("answers")
-#
-#     if not all([userId, testId, answers]):
-#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
-#     if not isinstance(answers, list):
-#         return jsonify({"error": "Answers must be a list"}), 400
-#
-#     submittedAt = datetime.now().isoformat()
-#
-#     # 🧠 Fetch original test data
-#     test_data = fetch_test_by_testId(testId)
-#     if not test_data:
-#         return jsonify({"error": "Test not found"}), 404
-#
-#     questions = test_data.get("questions", [])
-#     if isinstance(questions, str):
-#         try:
-#             questions = json.loads(questions)
-#         except Exception:
-#             questions = []
-#
-#     # Build lookup for questions
-#     question_map = {}
-#     for q in questions:
-#         qid = q.get("questionId")
-#         if qid:
-#             question_map[qid] = q
-#
-#     totalQuestions = len(question_map)
-#     total_correct = 0
-#     total_mcq = 0
-#     total_descriptive = 0
-#     mcq_correct = 0
-#     results = []
-#     descriptive_question_ids = []
-#
-#     # ✅ Process each submitted answer based on question type
-#     for ans in answers:
-#         qid = ans.get("questionId")
-#         qtext = ans.get("question")
-#         user_ans = ans.get("your_answer")
-#
-#         # Find the question details
-#         question_details = None
-#         if qid and qid in question_map:
-#             question_details = question_map.get(qid)
-#         elif qtext:
-#             for q in questions:
-#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
-#                     question_details = q
-#                     qid = q.get("questionId")
-#                     break
-#
-#         if not question_details:
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", qtext),
-#                 ("question_type", "unknown"),
-#                 ("your_answer", user_ans),
-#                 ("correct_answer", None),
-#                 ("is_correct", False),
-#                 ("status", "question_not_found")
-#             ]))
-#             continue
-#
-#         question_type = question_details.get("question_type", "MCQ").upper()
-#
-#         if question_type == "MCQ":
-#             # ✅ MCQ: Check answer immediately
-#             total_mcq += 1
-#             correct_ans = question_details.get("answer")
-#             is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
-#
-#             if is_correct:
-#                 total_correct += 1
-#                 mcq_correct += 1
-#
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", question_details.get("question", "")),
-#                 ("question_type", "MCQ"),
-#                 ("your_answer", user_ans),
-#                 ("correct_answer", correct_ans),
-#                 ("is_correct", is_correct),
-#                 ("status", "graded")
-#             ]))
-#
-#         else:  # DESCRIPTIVE
-#             # ⏳ Descriptive: Store answer, defer grading
-#             total_descriptive += 1
-#             descriptive_question_ids.append(qid)
-#             knowledge_base = question_details.get("knowledge_base", "")
-#
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", question_details.get("question", "")),
-#                 ("question_type", "DESCRIPTIVE"),
-#                 ("your_answer", user_ans),
-#                 ("correct_answer", knowledge_base),
-#                 ("is_correct", None),
-#                 ("ai_score", None),
-#                 ("status", "pending_grading")
-#             ]))
-#
-#     # 🧮 Calculate preliminary score (only from MCQs)
-#     if totalQuestions > 0:
-#         preliminary_score = round((total_correct / totalQuestions) * 100, 2)
-#     else:
-#         preliminary_score = 0.0
-#
-#     # 💾 Store submission attempt
-#     is_stored, attemptId = store_submitted_test(
-#         userId=userId,
-#         testId=testId,
-#         testTitle=testTitle,
-#         timeSpent=timeSpent,
-#         totalTime=totalTime,
-#         submittedAt=submittedAt,
-#         detailed_results=results,
-#         score=preliminary_score,
-#         total_questions=totalQuestions,
-#         total_correct=total_correct,
-#         total_mcq=total_mcq,
-#         total_descriptive=total_descriptive,
-#         mcq_correct=mcq_correct,
-#         grading_status="partial" if total_descriptive > 0 else "complete",
-#         ai_feedback=None  # Will be filled by grade_descriptive endpoint
-#     )
-#
-#     if not is_stored:
-#         return jsonify({"error": "Failed to store submission"}), 500
-#
-#     # 📦 Final response
-#     response = OrderedDict([
-#         ("attemptId", attemptId),
-#         ("userId", userId),
-#         ("testId", testId),
-#         ("testTitle", testTitle),
-#         ("submittedAt", submittedAt),
-#         ("timeSpent", timeSpent),
-#         ("total_questions", totalQuestions),
-#         ("total_mcq", total_mcq),
-#         ("total_descriptive", total_descriptive),
-#         ("mcq_correct", mcq_correct),
-#         ("total_correct", total_correct),
-#         ("score", preliminary_score),
-#         ("grading_status", "partial" if total_descriptive > 0 else "complete"),
-#         ("descriptive_questions_pending", descriptive_question_ids),
-#         ("detailed_results", results)
-#     ])
-#
-#     return jsonify(response)
 
 
 @app.route("/tests/submit", methods=["POST"])
@@ -1483,139 +1328,6 @@ def grade_test_analysis():
 
 
 
-
-
-# @app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
-# def grade_descriptive_questions(attemptId):
-#     """
-#     Grade all pending descriptive questions for a specific test attempt.
-#     Stores the full AI feedback report for each question.
-#     Frontend should call this immediately after /tests/submit if there are descriptive questions.
-#     """
-#     try:
-#         # Fetch the submission
-#         results = client.retrieve(
-#             collection_name=COLLECTION_SUBMITTED,
-#             ids=[attemptId],
-#             with_payload=True,
-#             with_vectors=False
-#         )
-#
-#         if not results:
-#             return jsonify({"error": "Submission not found"}), 404
-#
-#         payload = _extract_payload(results[0])
-#         detailed_results = json.loads(payload.get("detailed_results", "[]"))
-#
-#         # This will store the full AI feedback for each descriptive question
-#         ai_feedback = {}
-#
-#         total_descriptive_score = 0
-#
-#         graded_count = 0
-#
-#         # Process each descriptive question
-#         for result in detailed_results:
-#             if result.get("question_type") == "DESCRIPTIVE" and result.get("status") == "pending_grading":
-#                 question_id = result.get("questionId")
-#                 student_answer = result.get("your_answer", "")
-#
-#                 # Fetch context for grading
-#                 context = fetch_question_context(question_id)
-#                 if not context:
-#                     result["status"] = "grading_error"
-#                     result["error"] = "Context not found"
-#                     continue
-#
-#                 # Prepare data for AI grading
-#                 combined_kb = f"Passage: {context['passage']}\n\nSource Info: {context['knowledge_base']}"
-#                 question_text = context['question']
-#
-#                 try:
-#                     # Call grading API - this returns the full report
-#                     report = get_grading_report(
-#                         kb_text=combined_kb,
-#                         question_text=question_text,
-#                         answer_text=student_answer
-#                     )
-#
-#                     print(f"\n[DEBUG] AI Grading Report for {question_id}:")
-#                     print(json.dumps(report, indent=2))
-#
-#                     # Extract score from the report
-#                     ai_score = float(report.get("total_score", 0))
-#
-#                     # Store the FULL AI feedback report
-#                     ai_feedback[question_id] = report
-#
-#                     # Update the result with AI grading info
-#                     result["ai_score"] = ai_score
-#                     result["status"] = "graded"
-#
-#                     # Determine if answer is correct based on score threshold
-#                     # You can adjust this threshold (currently 6 out of 10)
-#                     # score_threshold = 6.0
-#                     # result["is_correct"] = ai_score >= score_threshold
-#                     weight = 1.0  # Weight for this question
-#                     partial_credit = (ai_score / 10.0) * weight
-#                     result["partial_score"] = partial_credit
-#
-#                     total_descriptive_score += ai_score
-#                     graded_count += 1
-#
-#                 except Exception as e:
-#                     print(f"[ERROR] Grading failed for {question_id}: {e}")
-#                     result["status"] = "grading_error"
-#                     result["error"] = str(e)
-#
-#         # Recalculate total score
-#         total_questions = int(payload.get("total_questions", 0))
-#         mcq_correct = int(payload.get("mcq_correct", 0))
-#
-#         # Count descriptive questions considered correct
-#         descriptive_correct = sum(1 for r in detailed_results
-#                                   if r.get("question_type") == "DESCRIPTIVE"
-#                                   and r.get("is_correct") == True)
-#
-#         # total_correct = mcq_correct + descriptive_correct
-#         total_correct = mcq_correct + sum(r.get("partial_score", 0) for r in detailed_results
-#                                          if r.get("question_type") == "DESCRIPTIVE")
-#
-#         final_score = round((total_correct / total_questions) * 100, 2) if total_questions > 0 else 0.0
-#
-#         # Calculate average descriptive score (out of 10)
-#         descriptive_average = round(total_descriptive_score / graded_count, 2) if graded_count > 0 else 0
-#
-#         # Update the submission with complete grading
-#         updated_payload = payload.copy()
-#         updated_payload["detailed_results"] = json.dumps(detailed_results)
-#         updated_payload["total_correct"] = total_correct
-#         updated_payload["score"] = final_score
-#         updated_payload["grading_status"] = "complete"
-#         updated_payload["descriptive_average_score"] = descriptive_average
-#         updated_payload["ai_feedback"] = json.dumps(ai_feedback)  # 🟢 Store full AI feedback
-#
-#         vec = embed(f"submitted_test:{payload['testId']}:{attemptId}")[0]
-#         p = models.PointStruct(id=attemptId, vector=vec, payload=updated_payload)
-#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
-#
-#         return jsonify({
-#             "status": "success",
-#             "attemptId": attemptId,
-#             "final_score": final_score,
-#             "total_correct": total_correct,
-#             "grading_status": "complete",
-#             "descriptive_average_score": descriptive_average,
-#             "graded_count": graded_count,
-#             "ai_feedback": ai_feedback,  # Return full feedback to frontend
-#             "detailed_results": detailed_results
-#         })
-#
-#     except Exception as e:
-#         print(f"[ERROR] grade_descriptive_questions: {e}")
-#         return jsonify({"error": str(e)}), 500
-
-
 @app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
 def grade_descriptive_questions(attemptId):
     """
@@ -1730,9 +1442,6 @@ def grade_descriptive_questions(attemptId):
 
 
 
-
-
-
 @app.route("/admin/subscriptions/assign", methods=["POST"])
 def assign_subscription():
     data = request.json
@@ -1763,8 +1472,6 @@ def get_my_subscribed_content():
         "count": len(questions),
         "questions": questions
     })
-
-
 
 
 
