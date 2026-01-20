@@ -380,69 +380,179 @@ def analyze_pdf():
         return jsonify({"error": f"Document analysis failed: {e}"}), 500
 
 
+#
+# @app.route("/question-banks/upload/images", methods=["POST"])
+# def upload_image():
+#     print("\n[START] /create_question_bank request received")
+#
+#     # 1. Validate inputs
+#     user_id = request.form.get("userId")
+#     user_name = request.form.get("userName", "User")
+#     title = request.form.get("title")
+#     description = request.form.get("description")
+#     image_files = request.files.getlist("image")  # ✅ multiple images
+#
+#     print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
+#     if not image_files or len(image_files) == 0:
+#         return jsonify({"error": "No image file(s) provided"}), 400
+#
+#     if not all([user_id, title, description]):
+#         return jsonify({"error": "userId, title, description are required"}), 400
+#
+#     all_results = []
+#
+#     # 2. Loop through each image
+#     for idx, img_file in enumerate(image_files, start=1):
+#         print(f"[STEP] Reading image {idx}/{len(image_files)} into memory...")
+#         file_bytes = img_file.read()
+#         filename = secure_filename(img_file.filename)
+#
+#         # 3. Directly call model for each image
+#         print(f"[STEP] Calling LayoutLM model for {filename} ...")
+#         try:
+#             result = latex_model(file_bytes, filename)
+#             print(f"[SUCCESS] Model returned result for {filename}")
+#             if isinstance(result, list):
+#                 all_results.extend(result)
+#             else:
+#                 all_results.append(result)
+#         except Exception as e:
+#             print(f"[ERROR] Failed on {filename}: {e}")
+#
+#     # 4. Add index to MCQs
+#     indexed_mcqs = [
+#         {**mcq, "documentIndex": i}
+#         for i, mcq in enumerate(all_results)
+#     ]
+#
+#     # 5. Store in vector DB
+#     print("[STEP] Storing Question Bank in vector database...")
+#     createdAtTimestamp = datetime.now().isoformat()
+#     stored_id = store_mcqs(
+#         user_id, user_name, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
+#     )
+#     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
+#
+#     print("[END] Request complete\n")
+#     return Response(
+#         json.dumps({
+#             "generatedQAId": stored_id,
+#             "userId": user_id,
+#             "fileCount": len(image_files),
+#             "createdAt": createdAtTimestamp,
+#         }, ensure_ascii=False),
+#         mimetype="application/json"
+#     )
+
+
+import threading
+import uuid
+import json
+from flask import Flask, request, jsonify, Response
+from datetime import datetime
+from werkzeug.utils import secure_filename
+
+
+# Reuse the same status dictionary we set up for the PDF logic
+# processing_tasks = {}
+
+def background_image_task(job_id, user_id, user_name, title, description, image_data_list):
+    """Heavy lifting for multiple images happens here."""
+    try:
+        print(f"[THREAD START] Processing Image Job: {job_id}")
+        all_results = []
+
+        # 2. Loop through each image (data already in memory as bytes)
+        for idx, (file_bytes, filename) in enumerate(image_data_list, start=1):
+            print(f"[STEP] Processing image {idx}/{len(image_data_list)}: {filename}")
+
+            try:
+                # Call your AI model
+                result = latex_model(file_bytes, filename)
+                print(f"[SUCCESS] Model returned result for {filename}")
+
+                if isinstance(result, list):
+                    all_results.extend(result)
+                else:
+                    all_results.append(result)
+            except Exception as e:
+                print(f"[ERROR] Failed on {filename}: {e}")
+
+        # 4. Add index to MCQs
+        indexed_mcqs = [
+            {**mcq, "documentIndex": i, "questionId": str(uuid.uuid4())}
+            for i, mcq in enumerate(all_results)
+        ]
+
+        # 5. Store in vector DB
+        print("[STEP] Storing Question Bank in vector database...")
+        createdAtTimestamp = datetime.now().isoformat()
+
+        # Note: Using your existing store_mcqs function
+        stored_id, all_have_answers = store_mcqs(
+            user_id, user_name, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
+        )
+
+        # Update the global task status so Flutter polling finds it
+        processing_tasks[job_id] = {
+            "status": "completed",
+            "generatedQAId": stored_id,
+            "userId": user_id,
+            "userName": user_name,
+            "fileCount": len(image_data_list),
+            "createdAt": createdAtTimestamp,
+            "answerFound": all_have_answers
+        }
+        print(f"[THREAD SUCCESS] Image Job {job_id} stored with id={stored_id}")
+
+    except Exception as e:
+        print(f"[THREAD ERROR] Image Job {job_id} failed: {str(e)}")
+        processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+
 
 @app.route("/question-banks/upload/images", methods=["POST"])
 def upload_image():
-    print("\n[START] /create_question_bank request received")
+    print("\n[START] /question-banks/upload/images request received")
 
     # 1. Validate inputs
     user_id = request.form.get("userId")
     user_name = request.form.get("userName", "User")
     title = request.form.get("title")
     description = request.form.get("description")
-    image_files = request.files.getlist("image")  # ✅ multiple images
+    image_files = request.files.getlist("image")
 
-    print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
     if not image_files or len(image_files) == 0:
         return jsonify({"error": "No image file(s) provided"}), 400
 
     if not all([user_id, title, description]):
         return jsonify({"error": "userId, title, description are required"}), 400
 
-    all_results = []
+    # Pre-process files into memory before starting thread
+    # We must do this because request.files is not thread-safe in Flask
+    image_data_list = []
+    for img_file in image_files:
+        content = img_file.read()
+        fname = secure_filename(img_file.filename)
+        image_data_list.append((content, fname))
 
-    # 2. Loop through each image
-    for idx, img_file in enumerate(image_files, start=1):
-        print(f"[STEP] Reading image {idx}/{len(image_files)} into memory...")
-        file_bytes = img_file.read()
-        filename = secure_filename(img_file.filename)
+    job_id = str(uuid.uuid4())
+    processing_tasks[job_id] = {"status": "processing"}
 
-        # 3. Directly call model for each image
-        print(f"[STEP] Calling LayoutLM model for {filename} ...")
-        try:
-            result = latex_model(file_bytes, filename)
-            print(f"[SUCCESS] Model returned result for {filename}")
-            if isinstance(result, list):
-                all_results.extend(result)
-            else:
-                all_results.append(result)
-        except Exception as e:
-            print(f"[ERROR] Failed on {filename}: {e}")
-
-    # 4. Add index to MCQs
-    indexed_mcqs = [
-        {**mcq, "documentIndex": i}
-        for i, mcq in enumerate(all_results)
-    ]
-
-    # 5. Store in vector DB
-    print("[STEP] Storing Question Bank in vector database...")
-    createdAtTimestamp = datetime.now().isoformat()
-    stored_id = store_mcqs(
-        user_id, user_name, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
+    # START THREAD
+    thread = threading.Thread(
+        target=background_image_task,
+        args=(job_id, user_id, user_name, title, description, image_data_list)
     )
-    print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
+    thread.start()
 
-    print("[END] Request complete\n")
-    return Response(
-        json.dumps({
-            "generatedQAId": stored_id,
-            "userId": user_id,
-            "fileCount": len(image_files),
-            "createdAt": createdAtTimestamp,
-        }, ensure_ascii=False),
-        mimetype="application/json"
-    )
+    print(f"[INFO] Thread started for {len(image_data_list)} images. jobId: {job_id}")
+
+    # Return 202 immediately so Flutter starts polling
+    return jsonify({
+        "status": "processing",
+        "jobId": job_id,
+        "message": f"Processing {len(image_data_list)} images in background."
+    }), 202
 
 
 # @app.route("/question-banks", methods=["GET"])
