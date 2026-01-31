@@ -46,15 +46,22 @@ MODEL OPTIONS
 ===========================================================
 """
 app = Flask(__name__)
-CORS(
-    app,
-    resources={r"/*": {
-        "origins": "https://edugenius-n679.onrender.com"
-    }},
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-)
+# CORS(
+#     app,
+#     resources={r"/*": {
+#         "origins": "https://edugenius-n679.onrender.com"
+#     }},
+#     supports_credentials=True,
+#     allow_headers=["Content-Type", "Authorization"],
+#     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+# )
+
+# Simplified, more robust configuration
+CORS(app, 
+     origins=["https://edugenius-n679.onrender.com"], # Use a list [] instead of a string
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 from collections import OrderedDict
 
