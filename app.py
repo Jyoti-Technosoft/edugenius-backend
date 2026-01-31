@@ -58,7 +58,7 @@ app = Flask(__name__)
 
 # Simplified, more robust configuration
 CORS(app, 
-     origins=["https://edugenius-n679.onrender.com"], # Use a list [] instead of a string
+     origins=["https://edugenius-n679.onrender.com"], 
      supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
