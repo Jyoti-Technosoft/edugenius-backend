@@ -46,6 +46,8 @@ MODEL OPTIONS
 ===========================================================
 """
 app = Flask(__name__)
+
+CORS(app)
 # CORS(
 #     app,
 #     resources={r"/*": {
@@ -57,11 +59,11 @@ app = Flask(__name__)
 # )
 
 # Simplified, more robust configuration
-CORS(app, 
-     origins=["https://edugenius-n679.onrender.com"], 
-     supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+# CORS(app,
+#      origins=["https://edugenius-n679.onrender.com"],
+#      supports_credentials=True,
+#      allow_headers=["Content-Type", "Authorization"],
+#      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 from collections import OrderedDict
 
@@ -232,7 +234,7 @@ from flask import Flask, request, jsonify, Response
 from datetime import datetime
 from werkzeug.utils import secure_filename
 
-app = Flask(__name__)
+
 
 # This acts as a temporary status tracker
 # In a real production app, use a database or Redis
