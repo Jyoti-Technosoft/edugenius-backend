@@ -79,7 +79,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, create_indexes
 
 
 from werkzeug.utils import secure_filename
@@ -1799,7 +1799,16 @@ def get_user_flashcards():
 
 
 
-
+@app.route("/debug/fix-db", methods=["GET"])
+def fix_database_indexes():
+    """
+    Temporary endpoint to run the index creation on the Live Server.
+    """
+    try:
+        create_indexes() # This runs the Qdrant indexing
+        return jsonify({"message": "Success! Indexes created on Live Server."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)
