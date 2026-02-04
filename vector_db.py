@@ -2258,22 +2258,20 @@ def initialize_bank_record(userId, title="Untitled", description="write a descri
         return None
 
 
-
-
-
-
-
 def fetch_user_flashcards(user_id):
     """
     Queries Qdrant for all items where userId matches and type is 'FLASHCARD'.
-    Returns a list of formatted dictionaries.
+    Calculates the real-time card count for each deck.
     """
+    # 1. Clean the ID
+    user_id_clean = str(user_id).strip().lower()
+
     try:
         search_filter = models.Filter(
             must=[
                 models.FieldCondition(
                     key="userId",
-                    match=models.MatchValue(value=user_id)
+                    match=models.MatchValue(value=user_id_clean)
                 ),
                 models.FieldCondition(
                     key="type",
@@ -2293,11 +2291,28 @@ def fetch_user_flashcards(user_id):
         decks = []
         for point in results:
             p = point.payload
+
+            # --- THE FIX: Real-time Count ---
+            # We ask Qdrant: "How many questions have this deck's ID?"
+            count_result = client.count(
+                collection_name=COLLECTION_QUESTIONS,
+                count_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="generatedQAId",
+                            match=models.MatchValue(value=point.id)
+                        )
+                    ]
+                )
+            )
+            real_count = count_result.count
+            # --------------------------------
+
             decks.append({
                 "id": point.id,
                 "title": p.get("title", "Untitled"),
                 "subtitle": p.get("description", ""),
-                "totalCards": p.get("card_count", 0),
+                "totalCards": real_count,  # <--- Send the real count!
                 "type": p.get("type", "FLASHCARD"),
                 "createdAt": p.get("createdAt")
             })
@@ -2306,7 +2321,6 @@ def fetch_user_flashcards(user_id):
 
     except Exception as e:
         print(f"Error in fetch_user_flashcards: {e}")
-        # Re-raise the exception or return None so the route knows something failed
         raise e
 
 
