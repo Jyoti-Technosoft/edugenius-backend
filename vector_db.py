@@ -2095,3 +2095,44 @@ def fetch_community_marketplace(limit=20):
         })
 
     return results
+
+
+
+def initialize_bank_record(userId, title="Untitled", description="write a description"):
+    """
+    Creates the metadata record for a question bank in Qdrant
+    without adding any questions yet.
+    """
+    try:
+        generatedQAId = str(uuid.uuid4())
+        userIdClean = str(userId).strip().lower()
+        createdAt = datetime.now().isoformat()
+        pdf_file = "MANUAL_CREATION"  # or "INITIALIZED_EMPTY"
+
+        metadata_for_bank = {
+            "userId": userIdClean,
+            "title": title,
+            "generatedQAId": generatedQAId,
+            "description": description,
+            "file_name": pdf_file,
+            "createdAt": createdAt
+        }
+
+        # Embed the initial title/description so the bank is searchable immediately
+        bank_vector = embed(f"{title} {description}")[0]
+
+        # Create the PointStruct for the bank
+        bank_point = models.PointStruct(
+            id=generatedQAId,
+            vector=bank_vector,
+            payload=_to_payload_for_bank(metadata_for_bank)
+        )
+
+        # Upsert ONLY the bank metadata to the MCQ collection
+        client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+
+        return generatedQAId
+
+    except Exception as e:
+        print("initialize_bank_record error:", e)
+        return None

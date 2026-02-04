@@ -79,7 +79,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record
 
 
 from werkzeug.utils import secure_filename
@@ -1694,6 +1694,48 @@ def get_community_marketplace():
         return jsonify({"error": str(e)}), 500
 
 
+
+
+
+
+@app.route("/question-banks/init", methods=["POST"])
+def init_question_bank():
+    """
+    Initializes a new question bank with default 'Untitled' metadata.
+    Returns the generatedQAId immediately for the frontend editor.
+    """
+    data = request.get_json(silent=True) or request.form.to_dict()
+    user_id = data.get("userId")
+
+    if not user_id:
+        return jsonify({"error": "userId is required"}), 400
+
+    # Use defaults as requested
+    default_title = "Untitled"
+    default_desc = "write a description"
+
+    try:
+        generated_qa_id = initialize_bank_record(
+            userId=user_id,
+            title=default_title,
+            description=default_desc
+        )
+
+        if not generated_qa_id:
+            return jsonify({"error": "Failed to initialize bank record"}), 500
+
+    except Exception as e:
+        print(f"Error initializing question bank: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+    return jsonify({
+        "message": "Question bank initialized successfully",
+        "generatedQAId": generated_qa_id,
+        "userId": user_id,
+        "title": default_title,
+        "description": default_desc,
+        "questions_count": 0
+    }), 201
 
 
 
