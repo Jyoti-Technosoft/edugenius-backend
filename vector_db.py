@@ -861,32 +861,114 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
 #
 #     return results
 
+#
+# def fetch_question_banks_metadata(userId: str):
+#     """
+#     Fetches a unified list of QBanks for the user's dashboard:
+#     1. QBanks they created (Owners).
+#     2. QBanks they subscribed to (Downloads).
+#     """
+#     userIdClean = str(userId).strip().lower()
+#
+#     # --- Step 1: Get all Subscribed Bank IDs ---
+#     sub_hits = client.scroll(
+#         collection_name=COLLECTION_SUBSCRIPTIONS,
+#         scroll_filter=models.Filter(
+#             must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+#         ),
+#         limit=1000,
+#         with_payload=True
+#     )[0]
+#     subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+#
+#     # --- Step 2: Query MCQ Collection for Owned OR Subscribed Banks ---
+#     # We use the 'should' clause for an 'OR' logic
+#     merged_filter = models.Filter(
+#         should=[
+#             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+#             models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
+#         ]
+#     )
+#
+#     banks, _ = client.scroll(
+#         collection_name=COLLECTION_MCQ,
+#         scroll_filter=merged_filter,
+#         limit=500,
+#         with_payload=True
+#     )
+#
+#     results = []
+#     for bank in banks:
+#         payload = bank.payload or {}
+#         gen_id = payload.get("generatedQAId")
+#
+#         # Determine Permissions
+#         # If the user is NOT the owner, it's read-only
+#         is_owner = payload.get("userId") == userIdClean
+#
+#         # Fresh Count from Questions Collection
+#         count = client.count(
+#             collection_name=COLLECTION_QUESTIONS,
+#             count_filter=models.Filter(
+#                 must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+#             )
+#         ).count
+#
+#         # Get top subject tags
+#         tags = compute_subject_tags_for_bank(gen_id)
+#
+#         results.append({
+#             "generatedQAId": gen_id,
+#             "title": payload.get("title", ""),
+#             "userName": payload.get("userName", ""),
+#             "description": payload.get("description", ""),
+#             "createdAt": payload.get("createdAt"),
+#             "totalQuestions": count,
+#             "tags": tags,
+#             "isPublic": payload.get("public", False),
+#             "canEdit": is_owner,  # UI uses this to show/hide Edit/Delete buttons
+#             "isDownloaded": gen_id in subscribed_ids
+#
+#         })
+#
+#     return results
+
+
 
 def fetch_question_banks_metadata(userId: str):
     """
     Fetches a unified list of QBanks for the user's dashboard:
     1. QBanks they created (Owners).
     2. QBanks they subscribed to (Downloads).
+    3. EXCLUDES Flashcards explicitly.
     """
     userIdClean = str(userId).strip().lower()
 
     # --- Step 1: Get all Subscribed Bank IDs ---
-    sub_hits = client.scroll(
-        collection_name=COLLECTION_SUBSCRIPTIONS,
-        scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-        ),
-        limit=1000,
-        with_payload=True
-    )[0]
-    subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+    # We allow this to fail gracefully if the collection doesn't exist yet
+    try:
+        sub_hits = client.scroll(
+            collection_name=COLLECTION_SUBSCRIPTIONS,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+            ),
+            limit=1000,
+            with_payload=True
+        )[0]
+        subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+    except Exception:
+        subscribed_ids = []
 
     # --- Step 2: Query MCQ Collection for Owned OR Subscribed Banks ---
     # We use the 'should' clause for an 'OR' logic
+    # We use 'must_not' to filter out Flashcards
     merged_filter = models.Filter(
         should=[
             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
             models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
+        ],
+        must_not=[
+            models.FieldCondition(key="type", match=models.MatchValue(value="FLASHCARD"))
         ]
     )
 
@@ -928,11 +1010,9 @@ def fetch_question_banks_metadata(userId: str):
             "isPublic": payload.get("public", False),
             "canEdit": is_owner,  # UI uses this to show/hide Edit/Delete buttons
             "isDownloaded": gen_id in subscribed_ids
-
         })
 
     return results
-
 
 from collections import Counter
 
@@ -2256,6 +2336,14 @@ def create_indexes():
 
     except Exception as e:
         print(f"Index creation skipped or failed (might already exist): {e}")
+
+
+
+
+
+
+
+
 
 # If you are running this file directly to test, uncomment this:
 if __name__ == "__main__":
