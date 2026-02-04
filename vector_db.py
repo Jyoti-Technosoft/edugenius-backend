@@ -2097,17 +2097,56 @@ def fetch_community_marketplace(limit=20):
     return results
 
 
+#
+# def initialize_bank_record(userId, title="Untitled", description="write a description"):
+#     """
+#     Creates the metadata record for a question bank in Qdrant
+#     without adding any questions yet.
+#     """
+#     try:
+#         generatedQAId = str(uuid.uuid4())
+#         userIdClean = str(userId).strip().lower()
+#         createdAt = datetime.now().isoformat()
+#         pdf_file = "MANUAL_CREATION"  # or "INITIALIZED_EMPTY"
+#
+#         metadata_for_bank = {
+#             "userId": userIdClean,
+#             "title": title,
+#             "generatedQAId": generatedQAId,
+#             "description": description,
+#             "file_name": pdf_file,
+#             "createdAt": createdAt
+#         }
+#
+#         # Embed the initial title/description so the bank is searchable immediately
+#         bank_vector = embed(f"{title} {description}")[0]
+#
+#         # Create the PointStruct for the bank
+#         bank_point = models.PointStruct(
+#             id=generatedQAId,
+#             vector=bank_vector,
+#             payload=_to_payload_for_bank(metadata_for_bank)
+#         )
+#
+#         # Upsert ONLY the bank metadata to the MCQ collection
+#         client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+#
+#         return generatedQAId
+#
+#     except Exception as e:
+#         print("initialize_bank_record error:", e)
+#         return None
 
-def initialize_bank_record(userId, title="Untitled", description="write a description"):
-    """
-    Creates the metadata record for a question bank in Qdrant
-    without adding any questions yet.
-    """
+
+def initialize_bank_record(userId, title="Untitled", description="write a description", record_type="QBANK"):
     try:
         generatedQAId = str(uuid.uuid4())
         userIdClean = str(userId).strip().lower()
         createdAt = datetime.now().isoformat()
-        pdf_file = "MANUAL_CREATION"  # or "INITIALIZED_EMPTY"
+
+        # Determine file tag based on type
+        # "MANUAL_FLASHCARD" helps you track origin if you export data later
+        pdf_file = "MANUAL_FLASHCARD" if record_type == "FLASHCARD" else "MANUAL_CREATION"
 
         metadata_for_bank = {
             "userId": userIdClean,
@@ -2115,24 +2154,109 @@ def initialize_bank_record(userId, title="Untitled", description="write a descri
             "generatedQAId": generatedQAId,
             "description": description,
             "file_name": pdf_file,
-            "createdAt": createdAt
+            "createdAt": createdAt,
+            # These will pass through your _to_payload_for_bank automatically:
+            "type": record_type,
+            "card_count": 0
         }
 
-        # Embed the initial title/description so the bank is searchable immediately
+        # Embed title/desc for search
         bank_vector = embed(f"{title} {description}")[0]
 
-        # Create the PointStruct for the bank
         bank_point = models.PointStruct(
             id=generatedQAId,
             vector=bank_vector,
+            # Your existing function handles the new keys perfectly
             payload=_to_payload_for_bank(metadata_for_bank)
         )
 
-        # Upsert ONLY the bank metadata to the MCQ collection
         client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
-
         return generatedQAId
 
     except Exception as e:
         print("initialize_bank_record error:", e)
         return None
+
+
+
+
+
+
+
+def fetch_user_flashcards(user_id):
+    """
+    Queries Qdrant for all items where userId matches and type is 'FLASHCARD'.
+    Returns a list of formatted dictionaries.
+    """
+    try:
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="userId",
+                    match=models.MatchValue(value=user_id)
+                ),
+                models.FieldCondition(
+                    key="type",
+                    match=models.MatchValue(value="FLASHCARD")
+                )
+            ]
+        )
+
+        results, _ = client.scroll(
+            collection_name=COLLECTION_MCQ,
+            scroll_filter=search_filter,
+            limit=100,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        decks = []
+        for point in results:
+            p = point.payload
+            decks.append({
+                "id": point.id,
+                "title": p.get("title", "Untitled"),
+                "subtitle": p.get("description", ""),
+                "totalCards": p.get("card_count", 0),
+                "type": p.get("type", "FLASHCARD"),
+                "createdAt": p.get("createdAt")
+            })
+
+        return decks
+
+    except Exception as e:
+        print(f"Error in fetch_user_flashcards: {e}")
+        # Re-raise the exception or return None so the route knows something failed
+        raise e
+
+
+# vector_db.py
+
+def create_indexes():
+    """
+    Creates the necessary indices for filtering in Qdrant.
+    Run this ONCE to fix the "Index required" error.
+    """
+    try:
+        # 1. Index the 'type' field (Crucial for your error)
+        client.create_payload_index(
+            collection_name=COLLECTION_MCQ,
+            field_name="type",
+            field_schema="keyword"  # 'keyword' is used for exact string matching
+        )
+        print("Index for 'type' created.")
+
+        # 2. Index the 'userId' field (Good practice, speeds up user queries)
+        client.create_payload_index(
+            collection_name=COLLECTION_MCQ,
+            field_name="userId",
+            field_schema="keyword"
+        )
+        print("Index for 'userId' created.")
+
+    except Exception as e:
+        print(f"Index creation skipped or failed (might already exist): {e}")
+
+# If you are running this file directly to test, uncomment this:
+if __name__ == "__main__":
+    create_indexes()
