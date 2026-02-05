@@ -509,11 +509,98 @@ def get_grading_report(kb_text, question_text, answer_text):
         return {"status": "error", "message": str(e)}
 
 
-# --- Test the connection ---
-if __name__ == "__main__":
-    kb = "Photosynthesis requires sunlight, CO2, and water."
-    q = "What is needed for photosynthesis?"
-    ans = "Sunlight and water are the main components."
+from gradio_client import Client, handle_file
+import os
 
-    report = get_hf_grading_report(kb, q, ans)
-    print(report)
+
+def grade_student_answer(question: str, student_answer: str, context_text: str = None, file_path: str = None,
+                         max_marks: int = 5):
+    """
+    Connects to the AI Grader Hugging Face Space to index content and grade an answer.
+
+    Args:
+        question (str): The question to ask.
+        student_answer (str): The student's response.
+        context_text (str, optional): Raw text content for the knowledge base.
+        file_path (str, optional): Path to a local .pdf or .txt file.
+        max_marks (int): Maximum score for the question.
+
+    Returns:
+        dict: A dictionary containing 'status', 'evidence', and 'feedback'.
+    """
+
+    # 1. Validation: Ensure we have exactly one source (Text OR File)
+    if context_text and file_path:
+        return {"error": "Please provide EITHER context_text OR file_path, not both."}
+    if not context_text and not file_path:
+        return {"error": "No content provided. Please provide context_text or file_path."}
+
+    client_url = "https://heerjtdev-try-answer.hf.space"
+
+    try:
+        print(f"🔌 Connecting to {client_url}...")
+        client = Client(client_url)
+
+        # 2. Step 1: Index Content
+        # We prepare the arguments based on what was provided
+        if file_path:
+            if not os.path.exists(file_path):
+                return {"error": f"File not found: {file_path}"}
+
+            # Use handle_file for file uploads in Gradio Client
+            idx_input_file = handle_file(file_path)
+            idx_input_text = ""  # Empty string for text arg
+            print(f"📤 Uploading file: {file_path}")
+        else:
+            idx_input_file = None
+            idx_input_text = context_text
+            print("📝 Indexing raw text...")
+
+        # Call /process_content
+        index_status = client.predict(
+            file_obj=idx_input_file,
+            raw_text=idx_input_text,
+            api_name="/process_content"
+        )
+
+        # Check if indexing returned an error message string
+        if "Error" in index_status or "content empty" in index_status.lower():
+            return {"error": f"Indexing Failed: {index_status}"}
+
+        # 3. Step 2: Retrieve & Grade
+        print("🧠 Grading answer...")
+        result = client.predict(
+            question=question,
+            student_answer=student_answer,
+            max_marks=max_marks,
+            api_name="/process_query"
+        )
+
+        evidence, feedback = result
+
+        return {
+            "success": True,
+            "indexing_status": index_status,
+            "evidence_used": evidence,
+            "grading_feedback": feedback
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ==========================================
+# Example Usage (Simulating your future API)
+# ==========================================
+if __name__ == "__main__":
+    # CASE A: Using Text
+    print("\n--- TEST CASE A: TEXT INPUT ---")
+    response_text = grade_student_answer(
+        question="Which Greek epic is Ulysses based on?",
+        student_answer="It is based on Homer's Odyssey.",
+        context_text="James Joyce's novel Ulysses is a parallel to Homer's Odyssey.",
+        max_marks=5
+    )
+    print(response_text)
+
+

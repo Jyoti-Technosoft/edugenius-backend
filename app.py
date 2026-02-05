@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 import random
 # from gradio_api import call_layoutlm_api
-from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report
+from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report, grade_student_answer
 
 
 
@@ -1798,17 +1798,68 @@ def get_user_flashcards():
 
 
 
+# Import the helper function we created earlier
+# Assuming it is in a file named 'grading_helper.py' or defined above
+# from grading_helper import grade_student_answer
 
-@app.route("/debug/fix-db", methods=["GET"])
-def fix_database_indexes():
+@app.route("/grade-single-answer", methods=["POST"])
+def grade_single_answer():
     """
-    Temporary endpoint to run the index creation on the Live Server.
+    Stateless grading endpoint.
+    Accepts question, answer, and context. Returns AI feedback immediately.
+    Does NOT store data in Qdrant/Database.
     """
     try:
-        create_indexes() # This runs the Qdrant indexing
-        return jsonify({"message": "Success! Indexes created on Live Server."}), 200
+        data = request.get_json()
+
+        # 1. Extract necessary fields from the frontend request
+        question = data.get("question")
+        student_answer = data.get("student_answer")
+        context = data.get("context")
+        max_marks = data.get("max_marks", 5)
+
+        # 2. Basic Validation
+        if not question or not student_answer:
+            return jsonify({"error": "Missing 'question' or 'student_answer'"}), 400
+
+        if not context:
+            return jsonify({"error": "Missing 'context'. Grading requires reference material."}), 400
+
+        # 3. Call the helper function (The one using Gradio Client)
+        # This function handles the connection to the Hugging Face Space
+        ai_result = grade_student_answer(
+            question=question,
+            student_answer=student_answer,
+            context_text=context,
+            max_marks=max_marks
+        )
+
+        # 4. Check for internal errors in the helper
+        if ai_result.get("error"):
+            return jsonify({"status": "error", "message": ai_result["error"]}), 500
+
+        # 5. Return the result directly to the frontend
+        # The frontend can now decide whether to show it, save it to local storage, etc.
+        return jsonify({
+            "status": "success",
+            "question": question,
+            "student_answer": student_answer,
+            "ai_feedback": ai_result["grading_feedback"],
+            "evidence_used": ai_result["evidence_used"],
+            # If you need to parse the score out specifically:
+            "raw_result": ai_result
+        })
+
     except Exception as e:
+        print(f"[ERROR] /grade-single-answer: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)
