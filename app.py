@@ -79,7 +79,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text
 
 
 from werkzeug.utils import secure_filename
@@ -1953,6 +1953,28 @@ def delete_source_endpoint(sourceId):
         return jsonify({"message": "Source deleted successfully"}), 200
     else:
         return jsonify({"error": "Failed to delete source"}), 500
+
+
+@app.route("/sources/<sourceId>/content", methods=["GET"])
+def get_source_content(sourceId):
+    """
+    Fetches the full text content of a specific source file.
+    """
+    if not sourceId:
+        return jsonify({"error": "sourceId is required"}), 400
+
+    # 1. Fetch text from Vector DB
+    full_text = fetch_full_source_text(sourceId)
+
+    if full_text is None:
+        # It might be None if ID is wrong or DB error,
+        # but also check if the metadata exists to be sure it's a 404 vs empty file
+        return jsonify({"error": "Source not found or failed to load"}), 404
+
+    return jsonify({
+        "sourceId": sourceId,
+        "content": full_text
+    }), 200
 
 
 if __name__ == '__main__':

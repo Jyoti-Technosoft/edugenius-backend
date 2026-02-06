@@ -1965,6 +1965,55 @@ try:
 except Exception as e:
     print(f"❌ Error connecting to Qdrant: {e}")
 
+
+def fetch_full_source_text(sourceId):
+    """
+    Retrieves the full text of a source by stitching together all its chunks.
+    """
+    try:
+        # 1. Fetch all chunks for this source ID
+        # We set a high limit to get the whole document
+        filt = models.Filter(
+            must=[
+                models.FieldCondition(key="sourceId", match=models.MatchValue(value=sourceId)),
+                models.FieldCondition(key="type", match=models.MatchValue(value="CONTENT_CHUNK"))
+            ]
+        )
+
+        # Scroll through all chunks (in case it's a massive book)
+        all_chunks = []
+        next_offset = None
+
+        while True:
+            results, next_offset = client.scroll(
+                collection_name=COLLECTION_SOURCES,
+                scroll_filter=filt,
+                limit=500,  # Batch size
+                offset=next_offset,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            for point in results:
+                all_chunks.append(point.payload)
+
+            if next_offset is None:
+                break
+
+        # 2. Sort chunks to ensure correct reading order
+        # We sort by 'page' first, then by 'index' (if you used chunking within pages)
+        sorted_chunks = sorted(all_chunks, key=lambda x: (int(x.get('page', 0)), int(x.get('index', 0))))
+
+        # 3. Concatenate text
+        full_text = "\n\n".join([chunk.get('text', '') for chunk in sorted_chunks])
+
+        return full_text
+
+    except Exception as e:
+        print(f"[ERROR] fetch_full_source_text: {e}")
+        return None
+
+
 #
 # # If you are running this file directly to test, uncomment this:
 # if __name__ == "__main__":
