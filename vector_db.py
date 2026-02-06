@@ -1338,7 +1338,7 @@ def store_mcqs_for_manual_creation(user_id, user_name, title, description, mcqs,
     """
     user_id_clean = str(user_id).strip().lower()
     generated_qa_id = str(uuid.uuid4())
-    created_at = datetime.datetime.now().isoformat()
+    created_at = datetime.now().isoformat()
 
     # --- 1. Bank Metadata (Added linkedSourceId) ---
     metadata_for_bank = {
