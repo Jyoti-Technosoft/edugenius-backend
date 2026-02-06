@@ -79,7 +79,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, create_indexes
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources
 
 
 from werkzeug.utils import secure_filename
@@ -1855,10 +1855,104 @@ def grade_single_answer():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/sources/upload", methods=["POST"])
+def upload_source_material_endpoint():
+    """
+    Uploads raw text to be used as reference material (RAG).
+    Expects 'text' string from frontend (which handles PDF->Text conversion).
+    Automatically chunks the text before storing.
+    """
+    print(f"\n[START] /sources/upload request received")
+
+    # 1. Validate Inputs (Accept JSON or Form Data)
+    data = request.get_json(silent=True) or request.form
+
+    user_id = data.get("userId")
+    title = data.get("title")
+    raw_text = data.get("text")
+
+    if not user_id or not raw_text:
+        return jsonify({"error": "userId and text are required"}), 400
+
+    if not title:
+        title = "Untitled Source"
+
+    try:
+        # 2. Chunk the text
+        # Since we receive one big string, we must split it.
+        # Embedding models usually have a limit (e.g. 512 tokens), so we split by ~1000 chars.
+        print(f"[STEP] Chunking text for {title}...")
+
+        chunk_size = 1000
+        overlap = 100
+        text_chunks_list = []
+
+        # Simple sliding window chunking
+        start = 0
+        page_counter = 1
+
+        while start < len(raw_text):
+            end = start + chunk_size
+            chunk = raw_text[start:end]
+
+            # Formatting for store_source_material
+            text_chunks_list.append({
+                "text": chunk,
+                "page": page_counter
+            })
+
+            # Move forward, keeping some overlap to maintain context
+            start += (chunk_size - overlap)
+            page_counter += 1
+
+        if not text_chunks_list:
+            return jsonify({"error": "Text provided was empty."}), 400
+
+        # 3. Store in Qdrant via vector_db
+        print(f"[STEP] Storing {len(text_chunks_list)} chunks in vector DB...")
+        source_id = store_source_material(user_id, title, text_chunks_list)
+
+        if source_id:
+            return jsonify({
+                "message": "Source material uploaded successfully",
+                "sourceId": source_id,
+                "chunks_processed": len(text_chunks_list),
+                "title": title
+            }), 201
+        else:
+            return jsonify({"error": "Failed to store source material"}), 500
+
+    except Exception as e:
+        print(f"[ERROR] upload_source_material_endpoint: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 
 
+
+
+@app.route("/sources/list", methods=["GET"])
+def list_user_sources():
+    """Fetches the list of uploaded source PDFs for a user."""
+    user_id = request.args.get("userId")
+    if not user_id:
+        return jsonify({"error": "userId is required"}), 400
+
+    sources = fetch_user_sources(user_id)
+    return jsonify(sources), 200
+
+
+@app.route("/sources/<sourceId>", methods=["DELETE"])
+def delete_source_endpoint(sourceId):
+    """Deletes a source file and its associated text chunks."""
+    if not sourceId:
+        return jsonify({"error": "sourceId is required"}), 400
+
+    success = delete_source_material(sourceId)
+    if success:
+        return jsonify({"message": "Source deleted successfully"}), 200
+    else:
+        return jsonify({"error": "Failed to delete source"}), 500
 
 
 if __name__ == '__main__':

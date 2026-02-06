@@ -21,6 +21,7 @@ COLLECTION_QUESTIONS = "questions_collection"
 COLLECTION_TEST_SESSIONS = "test_sessions_collection"
 COLLECTION_SUBMITTED = "submitted_tests_collection"
 COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
+COLLECTION_SOURCES = "source_materials_collection"
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 
@@ -50,6 +51,12 @@ def ensure_collections():
             vectors_config=vector_params
         )
 
+    if COLLECTION_SOURCES not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_SOURCES,
+            vectors_config=vector_params
+        )
+
     if COLLECTION_TEST_SESSIONS not in existing:
         client.create_collection(
             collection_name=COLLECTION_TEST_SESSIONS,
@@ -69,16 +76,7 @@ def ensure_collections():
         )
 
 
-    # ---- ADD PAYLOAD INDEXES (same as before) ----
-    # def _safe_index(col, field):
-    #     try:
-    #         client.create_payload_index(
-    #             collection_name=col,
-    #             field_name=field,
-    #             field_schema=models.PayloadSchemaType.KEYWORD
-    #         )
-    #     except Exception:
-    #         pass
+
 
     # ---- ADD PAYLOAD INDEXES ----
     def _safe_index(col, field, schema=models.PayloadSchemaType.KEYWORD):  # Added 'schema' with a default
@@ -113,6 +111,8 @@ def ensure_collections():
     _safe_index(COLLECTION_SUBSCRIPTIONS, "userId")
     _safe_index(COLLECTION_SUBSCRIPTIONS, "generatedQAId")
 
+    _safe_index(COLLECTION_SOURCES, "type", models.PayloadSchemaType.KEYWORD)
+
 
 
 ensure_collections()
@@ -133,6 +133,15 @@ def _to_payload_for_question(meta: Dict[str, Any]):
     p = dict(meta)
     if "options" in p and not isinstance(p["options"], str):
         p["options"] = json.dumps(p["options"])
+    return p
+
+
+def _to_payload_for_source(meta: Dict[str, Any]):
+    p = dict(meta)
+    # Ensure complex objects are strings
+    for k, v in p.items():
+        if isinstance(v, (dict, list)):
+            p[k] = json.dumps(v)
     return p
 
 def update_answer_flag_in_qdrant(generatedQAId: str, all_have_answers: bool):
@@ -266,230 +275,6 @@ def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]
     return image_fields, cleaned_mcq
 
 
-# --- MAIN FUNCTION ---
-# def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
-#     userIdClean = str(userId).strip().lower()
-#     generatedQAId = str(uuid.uuid4())
-#
-#     metadata_for_bank = {
-#         "userId": userIdClean,
-#         "title": title,
-#         "generatedQAId": generatedQAId,
-#         "description": description,
-#         "file_name": pdf_file,
-#         "createdAt": createdAt
-#     }
-#
-#     bank_vector = embed(f"{title} {description}")[0]
-#
-#     question_points = []
-#     all_have_answers = True
-#     BATCH_SIZE = 256
-#
-#     # --- Step 1: Process and Batch Questions ---
-#     for i, mcq in enumerate(mcqs):
-#         mcq = clean_mcq_text(mcq)
-#
-#         # 🟢 CHANGE 1: Get image data. image_fields will be the dictionary like {"equation77": "iVBORw0..."}
-#         image_fields, mcq_cleaned = get_image_data(mcq)
-#
-#         # --- Answer Processing (Unchanged) ---
-#         raw_answer = mcq.get("answer", "")
-#         normalized = normalize_text(raw_answer)
-#
-#         if is_invalid_answer(normalized):
-#             canonical_answer = ""
-#         else:
-#             options = mcq.get("options", {}) or {}
-#             parts = split_multi_answers(normalized)
-#             mapped_keys = [
-#                 map_answer_to_option(normalize_text(part), options)
-#                 for part in parts
-#                 if map_answer_to_option(normalize_text(part), options)
-#             ]
-#             canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
-#
-#         if not canonical_answer:
-#             all_have_answers = False
-#
-#         # --- ID & Index Assignment ---
-#         questionId = str(uuid.uuid4())
-#
-#         # --- Payload Construction ---
-#         # Start with base fields
-#         q_meta = OrderedDict([
-#             ("questionId", questionId),
-#             ("generatedQAId", generatedQAId),
-#             ("userId", userIdClean),
-#             ("question", mcq.get("question", "")),
-#             ("noise", mcq.get("noise", "")),
-#             ("passage", mcq.get("passage") or ""),
-#             # Options still needs to be stored as a string if Qdrant schema requires it
-#             ("options", json.dumps(mcq.get("options", {}))),
-#             ("answer", canonical_answer),
-#             ("documentIndex", i)
-#         ])
-#
-#         # 🟢 CHANGE 2: Merge the image fields directly into the payload
-#         # This unpacks {"equation77": "...", "equation79": "..."} into the dictionary
-#         q_meta.update(image_fields)
-#         pred_sub = mcq.get("predicted_subject", {})
-#         pred_con = mcq.get("predicted_concept", {})
-#
-#         q_meta["predicted_subject"] = OrderedDict([
-#             ("label", pred_sub.get("label", "")),
-#             ("confidence", pred_sub.get("confidence", 0))
-#         ])
-#
-#         q_meta["predicted_concept"] = OrderedDict([
-#             ("label", pred_con.get("label", "")),
-#             ("confidence", pred_con.get("confidence", 0))
-#         ])
-#         # --- Vector & Point Creation (Embedding still done per question) ---
-#         q_vec = embed(mcq.get("question", "") or "")[0]
-#         point = models.PointStruct(
-#             id=questionId,
-#             vector=q_vec,
-#             payload=_to_payload_for_question(q_meta)
-#         )
-#         question_points.append(point)
-#
-#         # --- Batch Upsert ---
-#         if len(question_points) >= BATCH_SIZE:
-#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#             question_points = []
-#
-#     if question_points:
-#         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#
-#     # --- Step 2: Bank-level metadata storage (Unchanged) ---
-#     metadata_for_bank["answerFound"] = all_have_answers
-#     bank_point = models.PointStruct(
-#         id=generatedQAId,
-#         vector=bank_vector,
-#         payload=_to_payload_for_bank(metadata_for_bank)
-#     )
-#     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
-#
-#     # NOTE: update_answer_flag_in_qdrant seems redundant if stored above, but kept for logic fidelity.
-#     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
-#     print(f"[INFO] All answers found: {all_have_answers}")
-#     return generatedQAId, all_have_answers
-
-
-
-
-#
-# def store_mcqs(userId, title, description, mcqs, pdf_file, createdAt):
-#     userIdClean = str(userId).strip().lower()
-#     generatedQAId = str(uuid.uuid4())
-#
-#     metadata_for_bank = {
-#         "userId": userIdClean,
-#         "title": title,
-#         "generatedQAId": generatedQAId,
-#         "description": description,
-#         "file_name": pdf_file,
-#         "createdAt": createdAt
-#     }
-#
-#     bank_vector = embed(f"{title} {description}")[0]
-#
-#     question_points = []
-#     all_have_answers = True
-#     BATCH_SIZE = 256
-#
-#     # --- Step 1: Process and Batch Questions ---
-#     for i, mcq in enumerate(mcqs):
-#         mcq = clean_mcq_text(mcq)
-#
-#         # Get image data
-#         image_fields, mcq_cleaned = get_image_data(mcq)
-#
-#         # --- Answer Processing ---
-#         raw_answer = mcq.get("answer", "")
-#         normalized = normalize_text(raw_answer)
-#
-#         if is_invalid_answer(normalized):
-#             canonical_answer = ""
-#         else:
-#             options = mcq.get("options", {}) or {}
-#             parts = split_multi_answers(normalized)
-#             mapped_keys = [
-#                 map_answer_to_option(normalize_text(part), options)
-#                 for part in parts
-#                 if map_answer_to_option(normalize_text(part), options)
-#             ]
-#             canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
-#
-#         if not canonical_answer:
-#             all_have_answers = False
-#
-#         # --- ID & Index Assignment ---
-#         questionId = str(uuid.uuid4())
-#
-#         # --- Payload Construction ---
-#         q_meta = OrderedDict([
-#             ("questionId", questionId),
-#             ("generatedQAId", generatedQAId),
-#             ("userId", userIdClean),
-#             ("question", mcq.get("question", "")),
-#             ("noise", mcq.get("noise", "")),
-#             ("passage", mcq.get("passage") or ""),
-#             ("options", json.dumps(mcq.get("options", {}))),
-#             # 🟢 ADDED: knowledge_base field added here
-#             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
-#             ("question_type", mcq.get("question_type","")),
-#             ("answer", canonical_answer),
-#             ("documentIndex", i)
-#         ])
-#
-#         # Merge image fields
-#         q_meta.update(image_fields)
-#
-#         pred_sub = mcq.get("predicted_subject", {})
-#         pred_con = mcq.get("predicted_concept", {})
-#
-#         q_meta["predicted_subject"] = OrderedDict([
-#             ("label", pred_sub.get("label", "")),
-#             ("confidence", pred_sub.get("confidence", 0))
-#         ])
-#
-#         q_meta["predicted_concept"] = OrderedDict([
-#             ("label", pred_con.get("label", "")),
-#             ("confidence", pred_con.get("confidence", 0))
-#         ])
-#
-#         # --- Vector & Point Creation ---
-#         q_vec = embed(mcq.get("question", "") or "")[0]
-#         point = models.PointStruct(
-#             id=questionId,
-#             vector=q_vec,
-#             payload=_to_payload_for_question(q_meta)
-#         )
-#         question_points.append(point)
-#
-#         # --- Batch Upsert ---
-#         if len(question_points) >= BATCH_SIZE:
-#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#             question_points = []
-#
-#     if question_points:
-#         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#
-#     # --- Step 2: Bank-level metadata storage ---
-#     metadata_for_bank["answerFound"] = all_have_answers
-#     bank_point = models.PointStruct(
-#         id=generatedQAId,
-#         vector=bank_vector,
-#         payload=_to_payload_for_bank(metadata_for_bank)
-#     )
-#     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
-#
-#     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
-#     print(f"[INFO] All answers found: {all_have_answers}")
-#     return generatedQAId, all_have_answers
-#
 
 
 
@@ -803,135 +588,7 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
     return [record]
 
 
-#
-# def fetch_question_banks_metadata(userId):
-#     results = []
-#     next_offset = None
-#
-#     while True:
-#         banks, next_offset = client.scroll(
-#             collection_name=COLLECTION_MCQ,
-#             scroll_filter=models.Filter(
-#                 must=[
-#                     models.FieldCondition(
-#                         key="userId",
-#                         match=models.MatchValue(value=userId)
-#                     )
-#                 ]
-#             ),
-#             limit=100,
-#             offset=next_offset
-#         )
-#
-#         if not banks:
-#             break
-#
-#         for bank in banks:
-#             payload = bank.payload or {}
-#             generatedQAId = bank.id
-#
-#             # 🔢 Always fresh question count
-#             count = client.count(
-#                 collection_name=COLLECTION_QUESTIONS,
-#                 count_filter=models.Filter(
-#                     must=[
-#                         models.FieldCondition(
-#                             key="generatedQAId",
-#                             match=models.MatchValue(value=generatedQAId)
-#                         )
-#                     ]
-#                 )
-#             )
-#
-#             # 🏷️ Compute tags dynamically
-#             tags = compute_subject_tags_for_bank(generatedQAId)
-#
-#             results.append({
-#                 "generatedQAId": generatedQAId,
-#                 "title": payload.get("title", ""),
-#                 "description": payload.get("description", ""),
-#                 "createdAt": payload.get("createdAt"),
-#                 "answerFound": payload.get("answerFound", False),
-#                 "totalQuestions": count.count,
-#                 "tags": tags
-#             })
-#
-#         if next_offset is None:
-#             break
-#
-#     return results
 
-#
-# def fetch_question_banks_metadata(userId: str):
-#     """
-#     Fetches a unified list of QBanks for the user's dashboard:
-#     1. QBanks they created (Owners).
-#     2. QBanks they subscribed to (Downloads).
-#     """
-#     userIdClean = str(userId).strip().lower()
-#
-#     # --- Step 1: Get all Subscribed Bank IDs ---
-#     sub_hits = client.scroll(
-#         collection_name=COLLECTION_SUBSCRIPTIONS,
-#         scroll_filter=models.Filter(
-#             must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-#         ),
-#         limit=1000,
-#         with_payload=True
-#     )[0]
-#     subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
-#
-#     # --- Step 2: Query MCQ Collection for Owned OR Subscribed Banks ---
-#     # We use the 'should' clause for an 'OR' logic
-#     merged_filter = models.Filter(
-#         should=[
-#             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
-#             models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
-#         ]
-#     )
-#
-#     banks, _ = client.scroll(
-#         collection_name=COLLECTION_MCQ,
-#         scroll_filter=merged_filter,
-#         limit=500,
-#         with_payload=True
-#     )
-#
-#     results = []
-#     for bank in banks:
-#         payload = bank.payload or {}
-#         gen_id = payload.get("generatedQAId")
-#
-#         # Determine Permissions
-#         # If the user is NOT the owner, it's read-only
-#         is_owner = payload.get("userId") == userIdClean
-#
-#         # Fresh Count from Questions Collection
-#         count = client.count(
-#             collection_name=COLLECTION_QUESTIONS,
-#             count_filter=models.Filter(
-#                 must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
-#             )
-#         ).count
-#
-#         # Get top subject tags
-#         tags = compute_subject_tags_for_bank(gen_id)
-#
-#         results.append({
-#             "generatedQAId": gen_id,
-#             "title": payload.get("title", ""),
-#             "userName": payload.get("userName", ""),
-#             "description": payload.get("description", ""),
-#             "createdAt": payload.get("createdAt"),
-#             "totalQuestions": count,
-#             "tags": tags,
-#             "isPublic": payload.get("public", False),
-#             "canEdit": is_owner,  # UI uses this to show/hide Edit/Delete buttons
-#             "isDownloaded": gen_id in subscribed_ids
-#
-#         })
-#
-#     return results
 
 
 
@@ -1170,78 +827,6 @@ def test_sessions_by_userId(userId):
         print("test_sessions_by_userId error:", e)
         return None
 
-# def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt, detailed_results, score, total_questions, total_correct):
-#     try:
-#         userIdClean = str(userId).strip().lower()
-#         attemptId = str(uuid.uuid4())  # 🔹 Unique ID for each test attempt
-#
-#         payload = {
-#             "attemptId": attemptId,
-#             "userId": userIdClean,
-#             "testId": testId,
-#             "testTitle": testTitle,
-#             "timeSpent": timeSpent,
-#             "totalTime": totalTime,
-#             "submittedAt": submittedAt,
-#             "score": score,
-#             "total_questions": total_questions,
-#             "detailed_results": json.dumps(detailed_results),
-#             "total_correct": total_correct
-#         }
-#
-#         # Use testId + attemptId to make vector unique per attempt
-#         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
-#
-#         # Store using attemptId as unique point ID
-#         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
-#
-#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
-#         return True,attemptId
-#
-#     except Exception as e:
-#         print("store_submitted_test error:", e)
-#         return False
-#
-#
-# def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,
-#                          detailed_results, score, total_questions, total_correct,
-#                          total_mcq=0, total_descriptive=0, mcq_correct=0,
-#                          grading_status="complete", ai_feedback=None):
-#     """
-#     Store submitted test with support for both MCQ and Descriptive questions.
-#     ai_feedback: dict mapping questionId to full AI grading report
-#     """
-#     try:
-#         userIdClean = str(userId).strip().lower()
-#         attemptId = str(uuid.uuid4())
-#
-#         payload = {
-#             "attemptId": attemptId,
-#             "userId": userIdClean,
-#             "testId": testId,
-#             "testTitle": testTitle,
-#             "timeSpent": timeSpent,
-#             "totalTime": totalTime,
-#             "submittedAt": submittedAt,
-#             "score": score,
-#             "total_questions": total_questions,
-#             "total_correct": total_correct,
-#             "total_mcq": total_mcq,
-#             "total_descriptive": total_descriptive,
-#             "mcq_correct": mcq_correct,
-#             "grading_status": grading_status,
-#             "detailed_results": json.dumps(detailed_results),
-#             "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})  # 🟢 NEW FIELD
-#         }
-#
-#         vec = embed(f"submitted_test:{testId}:{attemptId}")[0]
-#         p = models.PointStruct(id=attemptId, vector=vec, payload=payload)
-#         client.upsert(collection_name=COLLECTION_SUBMITTED, points=[p])
-#
-#         return True, attemptId
-#     except Exception as e:
-#         print("store_submitted_test error:", e)
-#         return False, None
 
 
 def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submittedAt,
@@ -1356,54 +941,6 @@ def submitted_tests_by_userId(userId):
         print("submitted_tests_by_userId error:", e)
         return []
 #
-# def fetch_submitted_test_by_testId(testId):
-#     try:
-#         # 🔹 Use a filter instead of retrieve(), since attempts are stored by attemptId
-#         filt = models.Filter(
-#             must=[
-#                 models.FieldCondition(key="testId", match=models.MatchValue(value=testId))
-#             ]
-#         )
-#
-#         dummy_vector = [0.0] * VECTOR_DIM  # Placeholder since we only need payloads
-#         hits = client.search(
-#             collection_name=COLLECTION_SUBMITTED,
-#             query_vector=dummy_vector,
-#             query_filter=filt,
-#             limit=1000,
-#             with_payload=True
-#         )
-#
-#         if not hits:
-#             return None
-#
-#         attempts = []
-#         for h in hits:
-#             payload = _extract_payload(h)
-#             if not payload:
-#                 continue
-#
-#             # Decode detailed_results if JSON string
-#             if "detailed_results" in payload and isinstance(payload["detailed_results"], str):
-#                 try:
-#                     payload["detailed_results"] = json.loads(payload["detailed_results"])
-#                 except Exception:
-#                     pass
-#
-#             # Ensure testId and attemptId are set
-#             payload["testId"] = payload.get("testId") or testId
-#             payload["attemptId"] = payload.get("attemptId") or _extract_id(h)
-#
-#             attempts.append(payload)
-#
-#         # 🔹 Sort attempts by submittedAt (latest first)
-#         attempts.sort(key=lambda x: x.get("submittedAt", ""), reverse=True)
-#
-#         return attempts
-#
-#     except Exception as e:
-#         print("fetch_submitted_test_by_testId error:", e)
-#         return None
 
 
 
@@ -1468,13 +1005,6 @@ def fetch_submitted_test_by_testId(testId):
         print("fetch_submitted_test_by_testId error:", e)
         return None
 
-# def delete_single_question(questionId):
-#     try:
-#         client.delete(collection_name=COLLECTION_QUESTIONS, points=[questionId])
-#         return True
-#     except Exception as e:
-#         print("delete_single_question error:", e)
-#         return False
 
 
 def delete_single_question(questionId):
@@ -1792,54 +1322,6 @@ def update_test_session(testId, updated_metadata):
         print("update_test_session error:", e)
         return False
 
-# def update_question_bank_metadata(generatedQAId: str, title: Optional[str] = None, description: Optional[str] = None):
-#     """
-#     Safely update only title and/or description for a question bank in Qdrant.
-#     This *does not* overwrite or remove existing mcqs or other metadata fields.
-#     Returns a dict: {"success": bool, "title_updated": bool, "description_updated": bool, "error": str (optional)}
-#     """
-#     result = {"success": False, "title_updated": False, "description_updated": False}
-#     try:
-#         # Retrieve the bank point (client.retrieve returns a list)
-#         bank_points = client.retrieve(collection_name=COLLECTION_MCQ, ids=[generatedQAId], with_payload=True)
-#         if not bank_points or len(bank_points) == 0:
-#             return result
-#
-#         bank_point = bank_points[0]
-#         payload = _extract_payload(bank_point)
-#         if not payload:
-#             return result
-#
-#         updated = False
-#         if title is not None and payload.get("title") != title:
-#             payload["title"] = title
-#             result["title_updated"] = True
-#             updated = True
-#         if description is not None and payload.get("description") != description:
-#             payload["description"] = description
-#             result["description_updated"] = True
-#             updated = True
-#
-#         if not updated:
-#             result["success"] = True
-#             return result
-#
-#         # Recompute the embedding for the bank (optional but keeps vectors consistent)
-#         new_vec = embed(f"{payload.get('title','')} {payload.get('description','')}")[0]
-#
-#         # Upsert the point back with same id, new vector and merged payload
-#         p = models.PointStruct(id=generatedQAId, vector=new_vec, payload=payload)
-#         client.upsert(collection_name=COLLECTION_MCQ, points=[p], wait=True)
-#
-#         result["success"] = True
-#         return result
-#     except Exception as e:
-#         print("update_question_bank_metadata error:", e)
-#         result["error"] = str(e)
-#         return result
-
-
-# vector_db.py
 
 def update_question_bank_metadata(generatedQAId: str, title: str = None, description: str = None,
                                   is_public: bool = None):
@@ -2177,45 +1659,6 @@ def fetch_community_marketplace(limit=20):
     return results
 
 
-#
-# def initialize_bank_record(userId, title="Untitled", description="write a description"):
-#     """
-#     Creates the metadata record for a question bank in Qdrant
-#     without adding any questions yet.
-#     """
-#     try:
-#         generatedQAId = str(uuid.uuid4())
-#         userIdClean = str(userId).strip().lower()
-#         createdAt = datetime.now().isoformat()
-#         pdf_file = "MANUAL_CREATION"  # or "INITIALIZED_EMPTY"
-#
-#         metadata_for_bank = {
-#             "userId": userIdClean,
-#             "title": title,
-#             "generatedQAId": generatedQAId,
-#             "description": description,
-#             "file_name": pdf_file,
-#             "createdAt": createdAt
-#         }
-#
-#         # Embed the initial title/description so the bank is searchable immediately
-#         bank_vector = embed(f"{title} {description}")[0]
-#
-#         # Create the PointStruct for the bank
-#         bank_point = models.PointStruct(
-#             id=generatedQAId,
-#             vector=bank_vector,
-#             payload=_to_payload_for_bank(metadata_for_bank)
-#         )
-#
-#         # Upsert ONLY the bank metadata to the MCQ collection
-#         client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
-#
-#         return generatedQAId
-#
-#     except Exception as e:
-#         print("initialize_bank_record error:", e)
-#         return None
 
 
 def initialize_bank_record(userId, title="Untitled", description="write a description", record_type="QBANK"):
@@ -2353,12 +1796,175 @@ def create_indexes():
 
 
 
+#=======================================================================================================
+
+def store_source_material(userId, title, text_chunks):
+    """
+    Stores a PDF source.
+    :param userId: Owner ID
+    :param title: Filename or Title of the PDF
+    :param text_chunks: List of dicts, e.g., [{'text': '...', 'page': 1}, ...]
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        sourceId = str(uuid.uuid4())
+        createdAt = datetime.now().isoformat()
+
+        # 1. Store the "File Header" (Metadata)
+        # We use the sourceId as the point ID for easy retrieval of the file list
+        meta_payload = {
+            "userId": userIdClean,
+            "sourceId": sourceId,
+            "title": title,
+            "createdAt": createdAt,
+            "type": "FILE_METADATA",  # Distinguishes header from content
+            "chunk_count": len(text_chunks)
+        }
+
+        # Create a vector for the title (to allow searching for files by name)
+        header_vec = embed(title)[0]
+
+        header_point = models.PointStruct(
+            id=sourceId,
+            vector=header_vec,
+            payload=_to_payload_for_source(meta_payload)
+        )
+
+        # 2. Process Text Chunks
+        points = []
+        BATCH_SIZE = 100
+
+        # Extract just the text for embedding
+        texts_to_embed = [chunk['text'] for chunk in text_chunks]
+        vectors = embed(texts_to_embed)  # Assumes embed() handles list of strings
+
+        for i, chunk in enumerate(text_chunks):
+            chunkId = str(uuid.uuid4())
+
+            chunk_payload = {
+                "userId": userIdClean,
+                "sourceId": sourceId,
+                "type": "CONTENT_CHUNK",
+                "text": chunk.get('text', ''),
+                "page": chunk.get('page', 1),
+                "index": i,
+                "parent_title": title
+            }
+
+            p = models.PointStruct(
+                id=chunkId,
+                vector=vectors[i],
+                payload=_to_payload_for_source(chunk_payload)
+            )
+            points.append(p)
+
+            # Batch upsert to prevent network timeouts on large files
+            if len(points) >= BATCH_SIZE:
+                client.upsert(collection_name=COLLECTION_SOURCES, points=points)
+                points = []
+
+        # Upsert remaining points
+        if points:
+            client.upsert(collection_name=COLLECTION_SOURCES, points=points)
+
+        # Upsert the header last
+        client.upsert(collection_name=COLLECTION_SOURCES, points=[header_point])
+
+        print(f"[INFO] Stored source '{title}' with {len(text_chunks)} chunks.")
+        return sourceId
+
+    except Exception as e:
+        print(f"[ERROR] store_source_material: {e}")
+        return None
 
 
+def fetch_user_sources(userId):
+    """Returns a list of uploaded PDF files (metadata only)."""
+    userIdClean = str(userId).strip().lower()
+
+    # Filter for the "FILE_METADATA" type we created in step 4
+    filt = models.Filter(
+        must=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+            models.FieldCondition(key="type", match=models.MatchValue(value="FILE_METADATA"))
+        ]
+    )
+
+    results, _ = client.scroll(
+        collection_name=COLLECTION_SOURCES,
+        scroll_filter=filt,
+        limit=100,
+        with_payload=True,
+        with_vectors=False
+    )
+
+    sources = []
+    for r in results:
+        p = r.payload
+        sources.append({
+            "sourceId": p.get("sourceId"),
+            "title": p.get("title"),
+            "createdAt": p.get("createdAt"),
+            "chunk_count": p.get("chunk_count", 0)
+        })
+    return sources
 
 
+def delete_source_material(sourceId):
+    """Deletes a file and ALL its text chunks."""
+    try:
+        # Filter deletes all points (Metadata + Chunks) that share this sourceId
+        client.delete(
+            collection_name=COLLECTION_SOURCES,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[models.FieldCondition(key="sourceId", match=models.MatchValue(value=sourceId))]
+                )
+            )
+        )
+        print(f"[INFO] Deleted source {sourceId}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] delete_source_material: {e}")
+        return False
 
 
-# If you are running this file directly to test, uncomment this:
-if __name__ == "__main__":
-    create_indexes()
+# check_indexes.py
+from vector_db import client, COLLECTION_SOURCES
+
+print(f"\n🔍 Checking indexes for collection: {COLLECTION_SOURCES}...\n")
+
+try:
+    # 1. Get the full status of the collection
+    info = client.get_collection(collection_name=COLLECTION_SOURCES)
+
+    # 2. Extract the schema (indexes)
+    schema = info.payload_schema
+
+    if not schema:
+        print("⚠️  Result: NO indexes exist at all.")
+        print("   This confirms the 'Index required' error is valid.")
+    else:
+        print("Found the following indexes:")
+        found_userid = False
+
+        for field_name, field_info in schema.items():
+            print(f" - Field: '{field_name}' \t(Type: {field_info.data_type})")
+            if field_name == "userId":
+                found_userid = True
+
+        print("-" * 30)
+
+        # 3. Final Verdict
+        if found_userid:
+            print("✅ VERDICT: 'userId' index EXISTS. The error might be a sync issue.")
+        else:
+            print("❌ VERDICT: 'userId' index is MISSING.")
+            print("   You must run the fix code to enable filtering.")
+
+except Exception as e:
+    print(f"❌ Error connecting to Qdrant: {e}")
+
+#
+# # If you are running this file directly to test, uncomment this:
+# if __name__ == "__main__":
