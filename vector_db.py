@@ -1122,44 +1122,117 @@ def add_single_question(generatedQAId, question_data):
         print("add_single_question error:", e)
         return False
 
-def store_mcqs_for_manual_creation(userId, title, description, mcqs):
+# def store_mcqs_for_manual_creation(userId, title, description, mcqs):
+#     try:
+#         generatedQAId = str(uuid.uuid4())
+#         userIdClean = str(userId).strip().lower()
+#         createdAt = datetime.now().isoformat()
+#         pdf_file = "MANUAL_CREATION"
+#         metadata_for_bank = {
+#             "userId": userIdClean,
+#             "title": title,
+#             "generatedQAId": generatedQAId,
+#             "description": description,
+#             "file_name": pdf_file,
+#             "createdAt": createdAt
+#
+#         }
+#         bank_vector = embed(f"{title} {description}")[0]
+#         bank_point = models.PointStruct(id=generatedQAId, vector=bank_vector, payload=_to_payload_for_bank(metadata_for_bank))
+#         client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+#
+#         points = []
+#         for mcq in mcqs:
+#             questionId = str(uuid.uuid4())
+#             mcq['generatedQAId'] = generatedQAId
+#             mcq['questionId'] = questionId
+#             mcq['userId'] = userIdClean
+#             options_data = mcq.get("options", "{}")
+#             question_text = mcq.get("question", "") or ""
+#             q_meta = OrderedDict([
+#                 ("questionId", questionId),
+#                 ("generatedQAId", generatedQAId),
+#                 ("userId", userIdClean),
+#                 ("question", mcq.get("question") or ""),
+#                 ("noise", mcq.get("noise") or None),
+#                 ("image", mcq.get("image") or None),
+#                 ("passage", mcq.get("passage") or ""),
+#                 ("options", options_data),
+#                 ("answer", mcq.get("answer") or ""),
+#                 ("documentIndex", mcq.get("documentIndex"))
+#             ])
+#             payload = _to_payload_for_question(q_meta)
+#             vec = embed(question_text)[0]
+#             p = models.PointStruct(id=questionId, vector=vec, payload=payload)
+#             points.append(p)
+#
+#         if points:
+#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=points)
+#         return generatedQAId
+#     except Exception as e:
+#         print("store_mcqs_for_manual_creation error:", e)
+#         return None
+
+
+def store_mcqs_for_manual_creation(userId, title, description, mcqs, linked_source_id=None):
     try:
         generatedQAId = str(uuid.uuid4())
         userIdClean = str(userId).strip().lower()
         createdAt = datetime.now().isoformat()
-        pdf_file = "MANUAL_CREATION"
+
+        # Use a distinctive file name for manual entries, or 'SOURCE_LINKED' if a source exists
+        pdf_file = "MANUAL_CREATION" if not linked_source_id else "SOURCE_LINKED"
+
         metadata_for_bank = {
             "userId": userIdClean,
             "title": title,
             "generatedQAId": generatedQAId,
             "description": description,
             "file_name": pdf_file,
-            "createdAt": createdAt
+            "createdAt": createdAt,
+            "type": "MANUAL",  # Explicitly mark type
+            "linkedSourceId": linked_source_id  # <--- NEW FIELD ADDED HERE
         }
+
+        # Create Vector for the Bank itself
         bank_vector = embed(f"{title} {description}")[0]
-        bank_point = models.PointStruct(id=generatedQAId, vector=bank_vector, payload=_to_payload_for_bank(metadata_for_bank))
+
+        # Upsert Bank Metadata
+        bank_point = models.PointStruct(
+            id=generatedQAId,
+            vector=bank_vector,
+            payload=_to_payload_for_bank(metadata_for_bank)
+        )
         client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
 
         points = []
         for mcq in mcqs:
             questionId = str(uuid.uuid4())
+
+            # Enrich question object with parent IDs
             mcq['generatedQAId'] = generatedQAId
             mcq['questionId'] = questionId
             mcq['userId'] = userIdClean
+
             options_data = mcq.get("options", "{}")
             question_text = mcq.get("question", "") or ""
+
             q_meta = OrderedDict([
                 ("questionId", questionId),
                 ("generatedQAId", generatedQAId),
                 ("userId", userIdClean),
-                ("question", mcq.get("question") or ""),
+                ("question", question_text),
                 ("noise", mcq.get("noise") or None),
                 ("image", mcq.get("image") or None),
                 ("passage", mcq.get("passage") or ""),
                 ("options", options_data),
                 ("answer", mcq.get("answer") or ""),
-                ("documentIndex", mcq.get("documentIndex"))
+                ("documentIndex", mcq.get("documentIndex")),
+
+                # Optional: You can also tag every individual question with the source ID
+                ("linkedSourceId", linked_source_id)
             ])
+
             payload = _to_payload_for_question(q_meta)
             vec = embed(question_text)[0]
             p = models.PointStruct(id=questionId, vector=vec, payload=payload)
@@ -1167,7 +1240,9 @@ def store_mcqs_for_manual_creation(userId, title, description, mcqs):
 
         if points:
             client.upsert(collection_name=COLLECTION_QUESTIONS, points=points)
+
         return generatedQAId
+
     except Exception as e:
         print("store_mcqs_for_manual_creation error:", e)
         return None
