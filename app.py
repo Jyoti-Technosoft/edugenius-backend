@@ -1199,24 +1199,88 @@ def edit_question_bank(generatedQAId):
 #         "questions_count": len(indexed_mcqs)
 #     }), 201
 
+#
+# @app.route("/question-banks/manual", methods=["POST"])
+# def create_manual_question_bank():
+#     """
+#     API to create a new question bank.
+#     Updated to support 'linkedSourceId' for connecting questions to a specific PDF source.
+#     """
+#     data = request.get_json(silent=True) or request.form.to_dict()
+#
+#     # 1. Extract Fields
+#     user_id = data.get("userId")
+#     title = data.get("title")
+#     description = data.get("description")
+#     raw_mcqs = data.get("questions", [])
+#
+#     # --- NEW: Get the source ID if it exists ---
+#     linked_source_id = data.get("linkedSourceId")
+#     # -------------------------------------------
+#
+#     if not all([user_id, title, description]) or not isinstance(raw_mcqs, list):
+#         return jsonify({"error": "userId, title, description, and a list of 'questions' are required"}), 400
+#
+#     if not raw_mcqs:
+#         return jsonify({"error": "Question bank must contain at least one question."}), 400
+#
+#     indexed_mcqs = []
+#
+#     # 2. Format Questions
+#     for i, mcq in enumerate(raw_mcqs):
+#         if 'options' in mcq and isinstance(mcq['options'], dict):
+#             mcq['options'] = json.dumps(mcq['options'])
+#
+#         mcq['documentIndex'] = i
+#         mcq['questionId'] = str(uuid.uuid4())
+#
+#         # --- NEW: Tag individual questions with the source ID too (Optional but recommended) ---
+#         if linked_source_id:
+#             mcq['linkedSourceId'] = linked_source_id
+#
+#         indexed_mcqs.append(mcq)
+#
+#     # 3. Store Metadata and Questions
+#     try:
+#         # You need to update your store_mcqs_for_manual_creation function in vector_db.py
+#         # to accept this new argument.
+#         generated_qa_id = store_mcqs_for_manual_creation(
+#             user_id,
+#             title,
+#             description,
+#             indexed_mcqs,
+#             linked_source_id=linked_source_id  # <--- PASS IT HERE
+#         )
+#     except Exception as e:
+#         print(f"Error storing manual question bank: {e}")
+#         return jsonify({"error": "Failed to create and store question bank"}), 500
+#
+#     return jsonify({
+#         "message": "Question bank created successfully",
+#         "generatedQAId": generated_qa_id,
+#         "userId": user_id,
+#         "title": title,
+#         "linkedSourceId": linked_source_id,  # Return it so frontend confirms it's linked
+#         "questions_count": len(indexed_mcqs)
+#     }), 201
+
 
 @app.route("/question-banks/manual", methods=["POST"])
 def create_manual_question_bank():
     """
-    API to create a new question bank.
-    Updated to support 'linkedSourceId' for connecting questions to a specific PDF source.
+    API to create a new question bank manually.
+    - Supports 'linkedSourceId' for connecting to source material.
+    - Tags questions as 'Handwritten' for subject/concept.
     """
     data = request.get_json(silent=True) or request.form.to_dict()
 
     # 1. Extract Fields
     user_id = data.get("userId")
+    user_name = data.get("userName", "Manual User")
     title = data.get("title")
     description = data.get("description")
     raw_mcqs = data.get("questions", [])
-
-    # --- NEW: Get the source ID if it exists ---
-    linked_source_id = data.get("linkedSourceId")
-    # -------------------------------------------
+    linked_source_id = data.get("linkedSourceId")  # <--- GET LINKED ID
 
     if not all([user_id, title, description]) or not isinstance(raw_mcqs, list):
         return jsonify({"error": "userId, title, description, and a list of 'questions' are required"}), 400
@@ -1226,7 +1290,7 @@ def create_manual_question_bank():
 
     indexed_mcqs = []
 
-    # 2. Format Questions
+    # 2. Format Questions & Inject "Handwritten" Metadata
     for i, mcq in enumerate(raw_mcqs):
         if 'options' in mcq and isinstance(mcq['options'], dict):
             mcq['options'] = json.dumps(mcq['options'])
@@ -1234,22 +1298,34 @@ def create_manual_question_bank():
         mcq['documentIndex'] = i
         mcq['questionId'] = str(uuid.uuid4())
 
-        # --- NEW: Tag individual questions with the source ID too (Optional but recommended) ---
+        # --- LOGIC ADDED HERE ---
+        # Force these fields so the analytics engine treats them as manual/handwritten
+        mcq['predicted_subject'] = {
+            "label": "Handwritten",
+            "confidence": 1.0
+        }
+        mcq['predicted_concept'] = {
+            "label": "Handwritten",
+            "confidence": 1.0
+        }
+
+        # Tag the individual question with the source ID too (useful for granular filtering)
         if linked_source_id:
             mcq['linkedSourceId'] = linked_source_id
+        # ------------------------
 
         indexed_mcqs.append(mcq)
 
     # 3. Store Metadata and Questions
     try:
-        # You need to update your store_mcqs_for_manual_creation function in vector_db.py
-        # to accept this new argument.
+        # We pass linked_source_id to the storage function
         generated_qa_id = store_mcqs_for_manual_creation(
             user_id,
+            user_name,
             title,
             description,
             indexed_mcqs,
-            linked_source_id=linked_source_id  # <--- PASS IT HERE
+            linked_source_id=linked_source_id
         )
     except Exception as e:
         print(f"Error storing manual question bank: {e}")
@@ -1259,8 +1335,8 @@ def create_manual_question_bank():
         "message": "Question bank created successfully",
         "generatedQAId": generated_qa_id,
         "userId": user_id,
-        "title": title,
-        "linkedSourceId": linked_source_id,  # Return it so frontend confirms it's linked
+        "userName": user_name,
+        "linkedSourceId": linked_source_id,
         "questions_count": len(indexed_mcqs)
     }), 201
 
