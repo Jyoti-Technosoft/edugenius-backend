@@ -2255,6 +2255,135 @@ def fetch_full_source_text(sourceId):
         return None
 
 
+def update_question_result_in_db(attemptId, questionId, ai_score, ai_feedback, status):
+    """
+    Updates a single question's grading status inside the 'detailed_results' list
+    of a submitted test in Qdrant.
+    """
+    try:
+        # 1. Retrieve the existing submission payload
+        points = client.retrieve(
+            collection_name=COLLECTION_SUBMITTED,
+            ids=[attemptId],
+            with_payload=True
+        )
+
+        if not points:
+            print(f"[ERROR] update_question_result: Attempt {attemptId} not found.")
+            return False
+
+        payload = _extract_payload(points[0])
+
+        # 2. Parse detailed_results (handle both List and JSON String formats)
+        detailed_results = payload.get("detailed_results", [])
+        if isinstance(detailed_results, str):
+            try:
+                detailed_results = json.loads(detailed_results)
+            except Exception:
+                detailed_results = []
+
+        # 3. Find and update the specific question
+        updated = False
+        for item in detailed_results:
+            # Comparison as strings to be safe against UUID vs String types
+            if str(item.get("questionId")) == str(questionId):
+                item["ai_score"] = ai_score
+                item["ai_feedback"] = ai_feedback
+                item["status"] = status
+
+                # Logic for UI correctness flag (assuming score out of 10)
+                # > 5.0 is considered "passing" partial credit
+                item["is_correct"] = float(ai_score) >= 5.0
+                updated = True
+                break
+
+        if not updated:
+            print(f"[WARN] Question {questionId} not found in attempt {attemptId}")
+            return False
+
+        # 4. Write the modified list back to Qdrant
+        # We ensure detailed_results is stored as a list (Qdrant handles parsing)
+        client.set_payload(
+            collection_name=COLLECTION_SUBMITTED,
+            payload={
+                "detailed_results": detailed_results
+            },
+            points=[attemptId]
+        )
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] update_question_result_in_db: {e}")
+        return False
+
+
+def finalize_submission_status(attemptId):
+    """
+    Recalculates the final score after background grading is complete
+    and updates the status to 'complete'.
+    """
+    try:
+        # 1. Fetch current data
+        points = client.retrieve(
+            collection_name=COLLECTION_SUBMITTED,
+            ids=[attemptId],
+            with_payload=True
+        )
+
+        if not points:
+            return False
+
+        payload = _extract_payload(points[0])
+
+        # 2. Parse results
+        detailed_results = payload.get("detailed_results", [])
+        if isinstance(detailed_results, str):
+            detailed_results = json.loads(detailed_results)
+
+        total_questions = int(payload.get("total_questions") or 1)
+        if total_questions == 0: total_questions = 1
+
+        # 3. Recalculate Scores
+        # We need to re-sum MCQ (boolean) + Descriptive (partial credit 0-1)
+        mcq_correct_count = 0
+        total_descriptive_points = 0.0
+
+        for res in detailed_results:
+            q_type = res.get("question_type", "MCQ").upper()
+
+            if q_type == "MCQ":
+                # Check explicit boolean flag from initial submission
+                if res.get("is_correct") is True:
+                    mcq_correct_count += 1
+            else:
+                # Descriptive: Normalize AI score (0-10) to partial credit (0-1)
+                # Falls back to 0 if not yet graded
+                raw_score = float(res.get("ai_score") or 0)
+                partial_credit = raw_score / 10.0
+                total_descriptive_points += partial_credit
+
+        # Aggregate total correct (integer MCQs + float partials)
+        total_correct_aggregate = mcq_correct_count + total_descriptive_points
+
+        # Final Percentage Calculation
+        final_score_percent = round((total_correct_aggregate / total_questions) * 100, 2)
+
+        # 4. Update Qdrant
+        client.set_payload(
+            collection_name=COLLECTION_SUBMITTED,
+            payload={
+                "score": final_score_percent,
+                "total_correct": total_correct_aggregate,
+                "grading_status": "complete"
+            },
+            points=[attemptId]
+        )
+        print(f"[INFO] Finalized grading for {attemptId}. Score: {final_score_percent}%")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] finalize_submission_status: {e}")
+        return False
 #
 # # If you are running this file directly to test, uncomment this:
 # if __name__ == "__main__":
