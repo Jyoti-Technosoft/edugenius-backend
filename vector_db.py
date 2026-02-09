@@ -942,8 +942,10 @@ def store_submitted_test(userId, testId, testTitle, timeSpent, totalTime, submit
             "concept_analysis": concept_analysis if concept_analysis else {},
             # Store complex lists/dicts as JSON strings for maximum compatibility
             # (Qdrant handles nested dicts, but stringifying ensures easy retrieval in all drivers)
-            "detailed_results": json.dumps(detailed_results),
-            "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})
+            # "detailed_results": json.dumps(detailed_results),
+            # "ai_feedback": json.dumps(ai_feedback) if ai_feedback else json.dumps({})
+            "detailed_results": detailed_results if detailed_results else [],
+            "ai_feedback": ai_feedback if ai_feedback else {}
         }
 
         # Generate a dummy or semantic vector for the submission entry
@@ -2202,41 +2204,7 @@ def delete_source_material(sourceId):
         return False
 
 
-# check_indexes.py
-from vector_db import client, COLLECTION_SOURCES
 
-print(f"\n🔍 Checking indexes for collection: {COLLECTION_SOURCES}...\n")
-
-try:
-    # 1. Get the full status of the collection
-    info = client.get_collection(collection_name=COLLECTION_SOURCES)
-
-    # 2. Extract the schema (indexes)
-    schema = info.payload_schema
-
-    if not schema:
-        print("⚠️  Result: NO indexes exist at all.")
-        print("   This confirms the 'Index required' error is valid.")
-    else:
-        print("Found the following indexes:")
-        found_userid = False
-
-        for field_name, field_info in schema.items():
-            print(f" - Field: '{field_name}' \t(Type: {field_info.data_type})")
-            if field_name == "userId":
-                found_userid = True
-
-        print("-" * 30)
-
-        # 3. Final Verdict
-        if found_userid:
-            print("✅ VERDICT: 'userId' index EXISTS. The error might be a sync issue.")
-        else:
-            print("❌ VERDICT: 'userId' index is MISSING.")
-            print("   You must run the fix code to enable filtering.")
-
-except Exception as e:
-    print(f"❌ Error connecting to Qdrant: {e}")
 
 
 def fetch_full_source_text(sourceId):

@@ -10,7 +10,7 @@ import json
 from datetime import datetime
 import random
 # from gradio_api import call_layoutlm_api
-from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report, grade_student_answer
+from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report, grade_student_answer, extract_text_from_image
 
 
 
@@ -802,187 +802,384 @@ def test_history_by_userId(userId):
 
 
 
+#
+# @app.route("/tests/submit", methods=["POST"])
+# def submit_test():
+#     """
+#     Enhanced API to submit student answers.
+#     Calculates overall score and breaks down performance by Subject and Concept.
+#     """
+#     data = request.get_json(silent=True) or {}
+#     userId = data.get("userId")
+#     testId = data.get("testId")
+#     testTitle = data.get("testTitle")
+#     timeSpent = data.get("timeSpent")
+#     totalTime = data.get("totalTime")
+#     answers = data.get("answers")
+#
+#     if not all([userId, testId, answers]):
+#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
+#     if not isinstance(answers, list):
+#         return jsonify({"error": "Answers must be a list"}), 400
+#
+#     submittedAt = datetime.now().isoformat()
+#
+#     # 🧠 Fetch original test data to verify correct answers and metadata
+#     test_data = fetch_test_by_testId(testId)
+#     if not test_data:
+#         return jsonify({"error": "Test not found"}), 404
+#
+#     questions = test_data.get("questions", [])
+#     if isinstance(questions, str):
+#         try:
+#             questions = json.loads(questions)
+#         except Exception:
+#             questions = []
+#
+#     # Build lookup for questions by ID
+#     question_map = {q.get("questionId"): q for q in questions if q.get("questionId")}
+#
+#     totalQuestions = len(questions)
+#     total_correct = 0
+#     total_mcq = 0
+#     total_descriptive = 0
+#     mcq_correct = 0
+#     results = []
+#     descriptive_question_ids = []
+#
+#     # 📊 Performance Analysis Tracking
+#     subject_analysis = {}  # { "Physics": {"total": 0, "correct": 0} }
+#     concept_analysis = {}  # { "Equilibrium": {"total": 0, "correct": 0} }
+#
+#     # ✅ Process each submitted answer
+#     for ans in answers:
+#         qid = ans.get("questionId")
+#         qtext = ans.get("question")
+#         user_ans = ans.get("your_answer")
+#
+#         # Find the question details in the master map
+#         question_details = question_map.get(qid)
+#
+#         # Fallback to text matching if ID is missing
+#         if not question_details and qtext:
+#             for q in questions:
+#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
+#                     question_details = q
+#                     qid = q.get("questionId")
+#                     break
+#
+#         if not question_details:
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", qtext),
+#                 ("status", "question_not_found")
+#             ]))
+#             continue
+#
+#         # Extract Subject and Concept Labels
+#         subj_label = (question_details.get("predicted_subject") or {}).get("label", "General")
+#         conc_label = (question_details.get("predicted_concept") or {}).get("label", "General")
+#
+#         # Initialize analysis containers
+#         if subj_label not in subject_analysis:
+#             subject_analysis[subj_label] = {"total": 0, "correct": 0}
+#         if conc_label not in concept_analysis:
+#             concept_analysis[conc_label] = {"total": 0, "correct": 0}
+#
+#         question_type = (question_details.get("question_type") or "MCQ").upper()
+#
+#         if question_type == "MCQ":
+#             total_mcq += 1
+#             subject_analysis[subj_label]["total"] += 1
+#             concept_analysis[conc_label]["total"] += 1
+#
+#             correct_ans = question_details.get("answer")
+#             is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
+#
+#             if is_correct:
+#                 total_correct += 1
+#                 mcq_correct += 1
+#                 subject_analysis[subj_label]["correct"] += 1
+#                 concept_analysis[conc_label]["correct"] += 1
+#
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", question_details.get("question", "")),
+#                 ("subject", subj_label),
+#                 ("concept", conc_label),
+#                 ("question_type", "MCQ"),
+#                 ("your_answer", user_ans),
+#                 ("correct_answer", correct_ans),
+#                 ("is_correct", is_correct),
+#                 ("status", "graded")
+#             ]))
+#
+#         else:  # DESCRIPTIVE
+#             total_descriptive += 1
+#             subject_analysis[subj_label]["total"] += 1
+#             concept_analysis[conc_label]["total"] += 1
+#             descriptive_question_ids.append(qid)
+#
+#             results.append(OrderedDict([
+#                 ("questionId", qid),
+#                 ("question", question_details.get("question", "")),
+#                 ("subject", subj_label),
+#                 ("concept", conc_label),
+#                 ("question_type", "DESCRIPTIVE"),
+#                 ("your_answer", user_ans),
+#                 ("correct_answer", question_details.get("knowledge_base", "")),
+#                 ("is_correct", None),  # Pending AI grading
+#                 ("status", "pending_grading")
+#             ]))
+#
+#     # 🧮 Calculate preliminary score (from MCQs)
+#     preliminary_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
+#
+#     # 💾 Store submission attempt in DB
+#     is_stored, attemptId = store_submitted_test(
+#         userId=userId,
+#         testId=testId,
+#         testTitle=testTitle,
+#         timeSpent=timeSpent,
+#         totalTime=totalTime,
+#         submittedAt=submittedAt,
+#         detailed_results=results,
+#         score=preliminary_score,
+#         total_questions=totalQuestions,
+#         total_correct=total_correct,
+#         total_mcq=total_mcq,
+#         total_descriptive=total_descriptive,
+#         mcq_correct=mcq_correct,
+#         subject_analysis=subject_analysis,  # NEW
+#         concept_analysis=concept_analysis,  # NEW
+#         grading_status="partial" if total_descriptive > 0 else "complete"
+#     )
+#
+#     if not is_stored:
+#         return jsonify({"error": "Failed to store submission"}), 500
+#
+#     # 📦 Final response with full analysis
+#     response = OrderedDict([
+#         ("attemptId", attemptId),
+#         ("userId", userId),
+#         ("testId", testId),
+#         ("testTitle", testTitle),
+#         ("submittedAt", submittedAt),
+#         ("timeSpent", timeSpent),
+#         ("score", preliminary_score),
+#         ("grading_status", "partial" if total_descriptive > 0 else "complete"),
+#         ("performance_report", {
+#             "by_subject": subject_analysis,
+#             "by_concept": concept_analysis
+#         }),
+#         ("stats", {
+#             "total_questions": totalQuestions,
+#             "total_mcq": total_mcq,
+#             "total_descriptive": total_descriptive,
+#             "mcq_correct": mcq_correct
+#         }),
+#         ("descriptive_pending", descriptive_question_ids),
+#         ("detailed_results", results)
+#     ])
+#
+#     return jsonify(response)
 
 @app.route("/tests/submit", methods=["POST"])
 def submit_test():
     """
-    Enhanced API to submit student answers.
-    Calculates overall score and breaks down performance by Subject and Concept.
+    Final Submission Endpoint.
+    - Matches User's JSON structure.
+    - Uses 'linkedSourceId' to find context.
+    - Grades MCQs numerically.
+    - Descriptive/HTR: Stores AI textual feedback without affecting score.
     """
-    data = request.get_json(silent=True) or {}
-    userId = data.get("userId")
-    testId = data.get("testId")
-    testTitle = data.get("testTitle")
-    timeSpent = data.get("timeSpent")
-    totalTime = data.get("totalTime")
-    answers = data.get("answers")
+    try:
+        # 1. Parse JSON Data
+        data = request.get_json(silent=True) or {}
 
-    if not all([userId, testId, answers]):
-        return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
-    if not isinstance(answers, list):
-        return jsonify({"error": "Answers must be a list"}), 400
+        userId = data.get("userId")
+        testId = data.get("testId")
+        testTitle = data.get("testTitle")
+        timeSpent = data.get("timeSpent")
+        totalTime = data.get("totalTime")
+        answers = data.get("answers", [])
 
-    submittedAt = datetime.now().isoformat()
+        if not all([userId, testId]):
+            return jsonify({"error": "Missing required fields: userId, testId"}), 400
 
-    # 🧠 Fetch original test data to verify correct answers and metadata
-    test_data = fetch_test_by_testId(testId)
-    if not test_data:
-        return jsonify({"error": "Test not found"}), 404
+        submittedAt = datetime.now().isoformat()
 
-    questions = test_data.get("questions", [])
-    if isinstance(questions, str):
-        try:
+        # 2. Fetch Test Metadata (The JSON you provided above comes from here)
+        test_data = fetch_test_by_testId(testId)
+        if not test_data:
+            return jsonify({"error": "Test not found"}), 404
+
+        questions = test_data.get("questions", [])
+        if isinstance(questions, str):
             questions = json.loads(questions)
-        except Exception:
-            questions = []
 
-    # Build lookup for questions by ID
-    question_map = {q.get("questionId"): q for q in questions if q.get("questionId")}
+        # Map for O(1) lookup
+        question_map = {str(q.get("questionId")): q for q in questions if q.get("questionId")}
 
-    totalQuestions = len(questions)
-    total_correct = 0
-    total_mcq = 0
-    total_descriptive = 0
-    mcq_correct = 0
-    results = []
-    descriptive_question_ids = []
+        # 3. Grading & Analysis Containers
+        totalQuestions = len(questions)
+        total_correct = 0
+        total_mcq = 0
+        total_descriptive = 0
+        mcq_correct = 0
 
-    # 📊 Performance Analysis Tracking
-    subject_analysis = {}  # { "Physics": {"total": 0, "correct": 0} }
-    concept_analysis = {}  # { "Equilibrium": {"total": 0, "correct": 0} }
+        results = []
+        ai_feedback_report = {}
+        subject_analysis = {}
+        concept_analysis = {}
 
-    # ✅ Process each submitted answer
-    for ans in answers:
-        qid = ans.get("questionId")
-        qtext = ans.get("question")
-        user_ans = ans.get("your_answer")
+        # 4. PROCESS ANSWERS
+        for ans in answers:
+            qid = str(ans.get("questionId"))
+            user_ans = ans.get("your_answer", "")
 
-        # Find the question details in the master map
-        question_details = question_map.get(qid)
+            # Fetch Master Data from your JSON structure
+            q_details = question_map.get(qid)
+            if not q_details: continue
 
-        # Fallback to text matching if ID is missing
-        if not question_details and qtext:
-            for q in questions:
-                if qtext.strip().lower() == q.get("question", "").strip().lower():
-                    question_details = q
-                    qid = q.get("questionId")
-                    break
+            # Extract Tags
+            subj_label = (q_details.get("predicted_subject") or {}).get("label", "General")
+            conc_label = (q_details.get("predicted_concept") or {}).get("label", "General")
 
-        if not question_details:
-            results.append(OrderedDict([
-                ("questionId", qid),
-                ("question", qtext),
-                ("status", "question_not_found")
-            ]))
-            continue
+            if subj_label not in subject_analysis: subject_analysis[subj_label] = {"total": 0, "correct": 0}
+            if conc_label not in concept_analysis: concept_analysis[conc_label] = {"total": 0, "correct": 0}
 
-        # Extract Subject and Concept Labels
-        subj_label = (question_details.get("predicted_subject") or {}).get("label", "General")
-        conc_label = (question_details.get("predicted_concept") or {}).get("label", "General")
-
-        # Initialize analysis containers
-        if subj_label not in subject_analysis:
-            subject_analysis[subj_label] = {"total": 0, "correct": 0}
-        if conc_label not in concept_analysis:
-            concept_analysis[conc_label] = {"total": 0, "correct": 0}
-
-        question_type = (question_details.get("question_type") or "MCQ").upper()
-
-        if question_type == "MCQ":
-            total_mcq += 1
             subject_analysis[subj_label]["total"] += 1
             concept_analysis[conc_label]["total"] += 1
 
-            correct_ans = question_details.get("answer")
-            is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
+            q_type = (q_details.get("question_type") or "MCQ").upper()
 
-            if is_correct:
-                total_correct += 1
-                mcq_correct += 1
-                subject_analysis[subj_label]["correct"] += 1
-                concept_analysis[conc_label]["correct"] += 1
+            # --- A. MCQ Logic ---
+            if q_type == "MCQ":
+                total_mcq += 1
+                correct_ans = q_details.get("options", {}).get(
+                    q_details.get("answer", ""))  # Handle option mapping if needed, or direct match
+                # Fallback: if 'answer' is direct value (like '4')
+                if not correct_ans:
+                    correct_ans = q_details.get("answer")
 
-            results.append(OrderedDict([
-                ("questionId", qid),
-                ("question", question_details.get("question", "")),
-                ("subject", subj_label),
-                ("concept", conc_label),
-                ("question_type", "MCQ"),
-                ("your_answer", user_ans),
-                ("correct_answer", correct_ans),
-                ("is_correct", is_correct),
-                ("status", "graded")
-            ]))
+                is_correct = (normalize_answer(str(user_ans)) == normalize_answer(str(correct_ans)))
 
-        else:  # DESCRIPTIVE
-            total_descriptive += 1
-            subject_analysis[subj_label]["total"] += 1
-            concept_analysis[conc_label]["total"] += 1
-            descriptive_question_ids.append(qid)
+                if is_correct:
+                    total_correct += 1
+                    mcq_correct += 1
+                    subject_analysis[subj_label]["correct"] += 1
+                    concept_analysis[conc_label]["correct"] += 1
 
-            results.append(OrderedDict([
-                ("questionId", qid),
-                ("question", question_details.get("question", "")),
-                ("subject", subj_label),
-                ("concept", conc_label),
-                ("question_type", "DESCRIPTIVE"),
-                ("your_answer", user_ans),
-                ("correct_answer", question_details.get("knowledge_base", "")),
-                ("is_correct", None),  # Pending AI grading
-                ("status", "pending_grading")
-            ]))
+                results.append(OrderedDict([
+                    ("questionId", qid),
+                    ("question", q_details.get("question", "")),
+                    ("subject", subj_label),
+                    ("concept", conc_label),
+                    ("question_type", "MCQ"),
+                    ("your_answer", user_ans),
+                    ("correct_answer", correct_ans),
+                    ("is_correct", is_correct),
+                    ("status", "graded")
+                ]))
 
-    # 🧮 Calculate preliminary score (from MCQs)
-    preliminary_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
+            # --- B. Descriptive / HTR Logic ---
+            else:
+                total_descriptive += 1
 
-    # 💾 Store submission attempt in DB
-    is_stored, attemptId = store_submitted_test(
-        userId=userId,
-        testId=testId,
-        testTitle=testTitle,
-        timeSpent=timeSpent,
-        totalTime=totalTime,
-        submittedAt=submittedAt,
-        detailed_results=results,
-        score=preliminary_score,
-        total_questions=totalQuestions,
-        total_correct=total_correct,
-        total_mcq=total_mcq,
-        total_descriptive=total_descriptive,
-        mcq_correct=mcq_correct,
-        subject_analysis=subject_analysis,  # NEW
-        concept_analysis=concept_analysis,  # NEW
-        grading_status="partial" if total_descriptive > 0 else "complete"
-    )
+                # ✅ CRITICAL FIX: Look for 'linkedSourceId' based on your JSON
+                source_id = q_details.get("linkedSourceId") or q_details.get("sourceId")
 
-    if not is_stored:
-        return jsonify({"error": "Failed to store submission"}), 500
+                grading_status = "pending_grading"
+                ai_feedback_text = "No feedback generated."
 
-    # 📦 Final response with full analysis
-    response = OrderedDict([
-        ("attemptId", attemptId),
-        ("userId", userId),
-        ("testId", testId),
-        ("testTitle", testTitle),
-        ("submittedAt", submittedAt),
-        ("timeSpent", timeSpent),
-        ("score", preliminary_score),
-        ("grading_status", "partial" if total_descriptive > 0 else "complete"),
-        ("performance_report", {
-            "by_subject": subject_analysis,
-            "by_concept": concept_analysis
-        }),
-        ("stats", {
-            "total_questions": totalQuestions,
-            "total_mcq": total_mcq,
-            "total_descriptive": total_descriptive,
-            "mcq_correct": mcq_correct
-        }),
-        ("descriptive_pending", descriptive_question_ids),
-        ("detailed_results", results)
-    ])
+                # Check: Source ID + Answer exists?
+                if source_id and user_ans and len(str(user_ans)) > 1:
+                    print(f"[INFO] Fetching context for SourceID: {source_id}")
+                    context_text = fetch_full_source_text(source_id)
 
-    return jsonify(response)
+                    if context_text:
+                        formatted_context = f"STORY CONTEXT:\n{context_text}\n\nEND OF CONTEXT"
+                        try:
+                            # 1. CALL AI GRADER
+                            ai_result = grade_student_answer(
+                                question=q_details.get("question", ""),
+                                student_answer=user_ans,
+                                context_text=formatted_context,
+                                max_marks=q_details.get("marks", 5)
+                            )
+
+                            # 2. STORE FEEDBACK
+                            if ai_result.get("success"):
+                                grading_status = "graded"
+                                ai_feedback_text = ai_result.get("grading_feedback", "No feedback text.")
+                                ai_feedback_report[qid] = ai_result
+                            else:
+                                print(f"[WARN] AI Grading failed for {qid}: {ai_result.get('error')}")
+
+                        except Exception as e:
+                            print(f"[ERROR] Auto-grading error QID {qid}: {e}")
+                    else:
+                        print(f"[WARN] No text found for SourceID: {source_id}")
+
+                results.append(OrderedDict([
+                    ("questionId", qid),
+                    ("question", q_details.get("question", "")),
+                    ("subject", subj_label),
+                    ("concept", conc_label),
+                    ("question_type", "DESCRIPTIVE"),
+                    ("your_answer", user_ans),
+                    ("correct_answer", "See AI Feedback"),
+                    ("is_correct", None),
+                    ("ai_score", 0),
+                    ("ai_feedback", ai_feedback_text),
+                    ("status", grading_status)
+                ]))
+
+        # 5. Final Calculations
+        final_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
+
+        pending_count = sum(1 for r in results if r["status"] == "pending_grading")
+        final_status = "partial" if pending_count > 0 else "complete"
+
+        # 6. Store Submission
+        is_stored, attemptId = store_submitted_test(
+            userId=userId,
+            testId=testId,
+            testTitle=testTitle,
+            timeSpent=timeSpent,
+            totalTime=totalTime,
+            submittedAt=submittedAt,
+            detailed_results=results,
+            score=final_score,
+            total_questions=totalQuestions,
+            total_correct=total_correct,
+            total_mcq=total_mcq,
+            total_descriptive=total_descriptive,
+            mcq_correct=mcq_correct,
+            subject_analysis=subject_analysis,
+            concept_analysis=concept_analysis,
+            grading_status=final_status,
+            ai_feedback=ai_feedback_report
+        )
+
+        if not is_stored:
+            return jsonify({"error": "Failed to store submission"}), 500
+
+        return jsonify({
+            "message": "Submission processed successfully",
+            "attemptId": attemptId,
+            "score": final_score,
+            "grading_status": final_status,
+            "results": results,
+            "ai_feedback": ai_feedback_report
+        }), 201
+
+    except Exception as e:
+        print(f"[ERROR] /tests/submit: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 
 
 
@@ -2114,6 +2311,51 @@ def get_source_content(sourceId):
         "content": full_text
     }), 200
 
+
+
+@app.route("/htr", methods=["POST"])
+def handwritten_text_recognition():
+    """
+    Receives an image file, sends it to the LastStraw Space,
+    and returns the extracted text without saving it to the DB.
+    """
+    # 1. Check if image part exists
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+
+    file = request.files['image']
+
+    # 2. Check if filename is empty
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    temp_path = None
+    try:
+        # 3. Save file temporarily
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(temp_path)
+
+        # 4. Call the helper function
+        extracted_text = extract_text_from_image(temp_path)
+
+        if extracted_text is None:
+             return jsonify({"error": "Failed to extract text from image"}), 500
+
+        # 5. Return result
+        return jsonify({
+            "message": "Text extracted successfully",
+            "text": extracted_text
+        }), 200
+
+    except Exception as e:
+        print(f"[ERROR] /htr: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # 6. Cleanup: Remove the temp file
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)
