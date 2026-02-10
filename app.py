@@ -1,14 +1,37 @@
 import firebase_admin
 from firebase_admin import credentials, messaging
+import os
+import base64
+import json
 
 # Initialize Firebase Admin SDK
-# Ensure firebase_credentials.json is present in the root directory or set via environment variable
 try:
-    cred = credentials.Certificate("firebase_credentials.json")
+    # 1. Try Local File (Development)
+    if os.path.exists("firebase_credentials.json"):
+        cred = credentials.Certificate("firebase_credentials.json")
+        print("[INFO] Firebase initialized from local JSON file.")
+
+    # 2. Try Environment Variable (Render Production)
+    elif os.environ.get("FIREBASE_CREDENTIALS_BASE64"):
+        # Decode the Base64 string back into a JSON dictionary
+        encoded_creds = os.environ.get("FIREBASE_CREDENTIALS_BASE64")
+        decoded_bytes = base64.b64decode(encoded_creds)
+        creds_dict = json.loads(decoded_bytes.decode('utf-8'))
+
+        cred = credentials.Certificate(creds_dict)
+        print("[INFO] Firebase initialized from Environment Variable.")
+
+    else:
+        # Fallback: Raise error if neither exists
+        raise FileNotFoundError(
+            "No credentials found! Add firebase_credentials.json locally or FIREBASE_CREDENTIALS_BASE64 on Render.")
+
+    # Initialize the app with the credentials found
     firebase_admin.initialize_app(cred)
     print("[INFO] Firebase Admin initialized successfully.")
+
 except Exception as e:
-    print(f"[WARN] Firebase initialization failed: {e}")
+    print(f"[CRITICAL] Firebase initialization failed: {e}")
 
 
 from collections import Counter
