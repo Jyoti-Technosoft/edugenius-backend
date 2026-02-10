@@ -452,7 +452,7 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
             standard_keys = [
                 "questionId", "generatedQAId", "userId", "question",
                 "options", "answer", "passage", "noise", "documentIndex",
-                "predicted_subject", "predicted_concept", "knowledge_base", "question_type", "difficulty", "userName"
+                "predicted_subject", "predicted_concept", "knowledge_base", "question_type", "difficulty", "userName", "linkedSourceId"
             ]
 
             ordered_mcq = collections.OrderedDict([(k, payload.get(k)) for k in standard_keys])
@@ -1519,6 +1519,7 @@ def delete_test_session_by_id(testId):
     except Exception as e:
         print("delete_test_session_by_id error:", e)
         return False
+
 def delete_submitted_test_by_id(testId):
     try:
         # 1️⃣ Build filter to match testId
