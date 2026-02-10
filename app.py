@@ -1322,7 +1322,10 @@ def submit_test():
 
             if q_type == "MCQ":
                 total_mcq += 1
-                correct_ans = q_details.get("options", {}).get(q_details.get("answer", "")) or q_details.get("answer")
+                # correct_ans = q_details.get("options", {}).get(q_details.get("answer", "")) or q_details.get("answer")
+                correct_ans = q_details.get("answer", "")
+
+
                 is_correct = (normalize_answer(str(user_ans)) == normalize_answer(str(correct_ans)))
 
                 if is_correct:
@@ -1694,6 +1697,8 @@ def edit_question_bank(generatedQAId):
 #         "linkedSourceId": linked_source_id,  # Return it so frontend confirms it's linked
 #         "questions_count": len(indexed_mcqs)
 #     }), 201
+
+
 
 
 @app.route("/question-banks/manual", methods=["POST"])
