@@ -1734,16 +1734,7 @@ def create_manual_question_bank():
         mcq['documentIndex'] = i
         mcq['questionId'] = str(uuid.uuid4())
 
-        # --- LOGIC ADDED HERE ---
-        # Force these fields so the analytics engine treats them as manual/handwritten
-        mcq['predicted_subject'] = {
-            "label": "Handwritten",
-            "confidence": 1.0
-        }
-        mcq['predicted_concept'] = {
-            "label": "Handwritten",
-            "confidence": 1.0
-        }
+
 
         # Tag the individual question with the source ID too (useful for granular filtering)
         if linked_source_id:
