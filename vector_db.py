@@ -22,6 +22,7 @@ COLLECTION_TEST_SESSIONS = "test_sessions_collection"
 COLLECTION_SUBMITTED = "submitted_tests_collection"
 COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
 COLLECTION_SOURCES = "source_materials_collection"
+COLLECTION_USERS = "users_collection"
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 
@@ -75,6 +76,13 @@ def ensure_collections():
             vectors_config=vector_params
         )
 
+    if COLLECTION_USERS not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_USERS,
+            vectors_config=vector_params
+        )
+
+
 
 
 
@@ -112,6 +120,7 @@ def ensure_collections():
     _safe_index(COLLECTION_SUBSCRIPTIONS, "generatedQAId")
 
     _safe_index(COLLECTION_SOURCES, "type", models.PayloadSchemaType.KEYWORD)
+    _safe_index(COLLECTION_USERS, "userId")
 
 
 
@@ -2568,6 +2577,58 @@ def finalize_submission_status(attemptId):
     except Exception as e:
         print(f"[ERROR] finalize_submission_status: {e}")
         return False
-#
-# # If you are running this file directly to test, uncomment this:
-# if __name__ == "__main__":
+
+
+
+
+
+#===========================================================================================================
+#Firebase Notification service
+#===========================================================================================================
+
+
+
+# Add this new function:
+def store_user_fcm_token(user_id, token):
+    try:
+        user_id_clean = str(user_id).strip().lower()
+        # We use userId as the point ID (hashing it to UUID if necessary)
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id_clean))
+
+        # Check if user exists to preserve other data, or just upsert
+        payload = {
+            "userId": user_id_clean,
+            "fcmToken": token,
+            "lastSeen": datetime.now().isoformat()
+        }
+
+        # Dummy vector
+        vec = [0.0] * VECTOR_DIM
+
+        client.upsert(
+            collection_name=COLLECTION_USERS,
+            points=[models.PointStruct(id=point_id, vector=vec, payload=payload)]
+        )
+        return True
+    except Exception as e:
+        print(f"Error storing FCM token: {e}")
+        return False
+
+
+def get_user_fcm_token(user_id):
+    try:
+        user_id_clean = str(user_id).strip().lower()
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id_clean))
+
+        points = client.retrieve(
+            collection_name=COLLECTION_USERS,
+            ids=[point_id],
+            with_payload=True
+        )
+
+        if points:
+            return points[0].payload.get("fcmToken")
+        return None
+    except Exception as e:
+        print(f"Error fetching FCM token: {e}")
+        return None

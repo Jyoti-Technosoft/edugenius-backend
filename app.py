@@ -1,4 +1,16 @@
-import uuid
+import firebase_admin
+from firebase_admin import credentials, messaging
+
+# Initialize Firebase Admin SDK
+# Ensure firebase_credentials.json is present in the root directory or set via environment variable
+try:
+    cred = credentials.Certificate("firebase_credentials.json")
+    firebase_admin.initialize_app(cred)
+    print("[INFO] Firebase Admin initialized successfully.")
+except Exception as e:
+    print(f"[WARN] Firebase initialization failed: {e}")
+
+
 from collections import Counter
 import pickle
 from typing import Dict, Any, Tuple, List
@@ -6,10 +18,7 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from qdrant_client import QdrantClient, models
 import os
-import json
-from datetime import datetime
 import random
-# from gradio_api import call_layoutlm_api
 from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report, grade_student_answer, extract_text_from_image
 
 
@@ -802,190 +811,124 @@ def test_history_by_userId(userId):
 
 
 
-#
-# @app.route("/tests/submit", methods=["POST"])
-# def submit_test():
-#     """
-#     Enhanced API to submit student answers.
-#     Calculates overall score and breaks down performance by Subject and Concept.
-#     """
-#     data = request.get_json(silent=True) or {}
-#     userId = data.get("userId")
-#     testId = data.get("testId")
-#     testTitle = data.get("testTitle")
-#     timeSpent = data.get("timeSpent")
-#     totalTime = data.get("totalTime")
-#     answers = data.get("answers")
-#
-#     if not all([userId, testId, answers]):
-#         return jsonify({"error": "Missing required fields: userId, testId, answers"}), 400
-#     if not isinstance(answers, list):
-#         return jsonify({"error": "Answers must be a list"}), 400
-#
-#     submittedAt = datetime.now().isoformat()
-#
-#     # 🧠 Fetch original test data to verify correct answers and metadata
-#     test_data = fetch_test_by_testId(testId)
-#     if not test_data:
-#         return jsonify({"error": "Test not found"}), 404
-#
-#     questions = test_data.get("questions", [])
-#     if isinstance(questions, str):
-#         try:
-#             questions = json.loads(questions)
-#         except Exception:
-#             questions = []
-#
-#     # Build lookup for questions by ID
-#     question_map = {q.get("questionId"): q for q in questions if q.get("questionId")}
-#
-#     totalQuestions = len(questions)
-#     total_correct = 0
-#     total_mcq = 0
-#     total_descriptive = 0
-#     mcq_correct = 0
-#     results = []
-#     descriptive_question_ids = []
-#
-#     # 📊 Performance Analysis Tracking
-#     subject_analysis = {}  # { "Physics": {"total": 0, "correct": 0} }
-#     concept_analysis = {}  # { "Equilibrium": {"total": 0, "correct": 0} }
-#
-#     # ✅ Process each submitted answer
-#     for ans in answers:
-#         qid = ans.get("questionId")
-#         qtext = ans.get("question")
-#         user_ans = ans.get("your_answer")
-#
-#         # Find the question details in the master map
-#         question_details = question_map.get(qid)
-#
-#         # Fallback to text matching if ID is missing
-#         if not question_details and qtext:
-#             for q in questions:
-#                 if qtext.strip().lower() == q.get("question", "").strip().lower():
-#                     question_details = q
-#                     qid = q.get("questionId")
-#                     break
-#
-#         if not question_details:
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", qtext),
-#                 ("status", "question_not_found")
-#             ]))
-#             continue
-#
-#         # Extract Subject and Concept Labels
-#         subj_label = (question_details.get("predicted_subject") or {}).get("label", "General")
-#         conc_label = (question_details.get("predicted_concept") or {}).get("label", "General")
-#
-#         # Initialize analysis containers
-#         if subj_label not in subject_analysis:
-#             subject_analysis[subj_label] = {"total": 0, "correct": 0}
-#         if conc_label not in concept_analysis:
-#             concept_analysis[conc_label] = {"total": 0, "correct": 0}
-#
-#         question_type = (question_details.get("question_type") or "MCQ").upper()
-#
-#         if question_type == "MCQ":
-#             total_mcq += 1
-#             subject_analysis[subj_label]["total"] += 1
-#             concept_analysis[conc_label]["total"] += 1
-#
-#             correct_ans = question_details.get("answer")
-#             is_correct = (normalize_answer(user_ans) == normalize_answer(correct_ans))
-#
-#             if is_correct:
-#                 total_correct += 1
-#                 mcq_correct += 1
-#                 subject_analysis[subj_label]["correct"] += 1
-#                 concept_analysis[conc_label]["correct"] += 1
-#
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", question_details.get("question", "")),
-#                 ("subject", subj_label),
-#                 ("concept", conc_label),
-#                 ("question_type", "MCQ"),
-#                 ("your_answer", user_ans),
-#                 ("correct_answer", correct_ans),
-#                 ("is_correct", is_correct),
-#                 ("status", "graded")
-#             ]))
-#
-#         else:  # DESCRIPTIVE
-#             total_descriptive += 1
-#             subject_analysis[subj_label]["total"] += 1
-#             concept_analysis[conc_label]["total"] += 1
-#             descriptive_question_ids.append(qid)
-#
-#             results.append(OrderedDict([
-#                 ("questionId", qid),
-#                 ("question", question_details.get("question", "")),
-#                 ("subject", subj_label),
-#                 ("concept", conc_label),
-#                 ("question_type", "DESCRIPTIVE"),
-#                 ("your_answer", user_ans),
-#                 ("correct_answer", question_details.get("knowledge_base", "")),
-#                 ("is_correct", None),  # Pending AI grading
-#                 ("status", "pending_grading")
-#             ]))
-#
-#     # 🧮 Calculate preliminary score (from MCQs)
-#     preliminary_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
-#
-#     # 💾 Store submission attempt in DB
-#     is_stored, attemptId = store_submitted_test(
-#         userId=userId,
-#         testId=testId,
-#         testTitle=testTitle,
-#         timeSpent=timeSpent,
-#         totalTime=totalTime,
-#         submittedAt=submittedAt,
-#         detailed_results=results,
-#         score=preliminary_score,
-#         total_questions=totalQuestions,
-#         total_correct=total_correct,
-#         total_mcq=total_mcq,
-#         total_descriptive=total_descriptive,
-#         mcq_correct=mcq_correct,
-#         subject_analysis=subject_analysis,  # NEW
-#         concept_analysis=concept_analysis,  # NEW
-#         grading_status="partial" if total_descriptive > 0 else "complete"
-#     )
-#
-#     if not is_stored:
-#         return jsonify({"error": "Failed to store submission"}), 500
-#
-#     # 📦 Final response with full analysis
-#     response = OrderedDict([
-#         ("attemptId", attemptId),
-#         ("userId", userId),
-#         ("testId", testId),
-#         ("testTitle", testTitle),
-#         ("submittedAt", submittedAt),
-#         ("timeSpent", timeSpent),
-#         ("score", preliminary_score),
-#         ("grading_status", "partial" if total_descriptive > 0 else "complete"),
-#         ("performance_report", {
-#             "by_subject": subject_analysis,
-#             "by_concept": concept_analysis
-#         }),
-#         ("stats", {
-#             "total_questions": totalQuestions,
-#             "total_mcq": total_mcq,
-#             "total_descriptive": total_descriptive,
-#             "mcq_correct": mcq_correct
-#         }),
-#         ("descriptive_pending", descriptive_question_ids),
-#         ("detailed_results", results)
-#     ])
-#
-#     return jsonify(response)
+from vector_db import get_user_fcm_token
+
+def send_push_notification(user_id, title, body, data=None):
+    token = get_user_fcm_token(user_id)
+    if not token:
+        print(f"[WARN] No FCM token found for user {user_id}")
+        return
+
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data=data or {},
+            token=token,
+        )
+        response = messaging.send(message)
+        print(f"[INFO] Notification sent: {response}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send notification: {e}")
 
 
-def background_grader(attemptId, answers, question_map):
+
+
+
+
+#
+# def background_grader(attemptId, answers, question_map, userId, testTitle):
+#     """
+#     Runs in a background thread to grade descriptive questions
+#     and update the database incrementally.
+#     """
+#     print(f"[BG] 🚀 Starting background grading for Attempt: {attemptId}")
+#
+#     try:
+#         # Loop through user answers to find Descriptive ones
+#         for ans in answers:
+#             qid = str(ans.get("questionId"))
+#             user_ans = ans.get("your_answer", "")
+#
+#             # Lookup question details
+#             q_details = question_map.get(qid)
+#             if not q_details: continue
+#
+#             q_type = (q_details.get("question_type") or "MCQ").upper()
+#
+#             # SKIP MCQs (They are already graded)
+#             if q_type == "MCQ":
+#                 continue
+#
+#             # Process Descriptive / HTR
+#             source_id = q_details.get("linkedSourceId") or q_details.get("sourceId")
+#
+#             if source_id and user_ans and len(str(user_ans)) > 1:
+#                 # Fetch Context
+#                 context_text = fetch_full_source_text(source_id)
+#
+#                 if context_text:
+#                     formatted_context = f"STORY CONTEXT:\n{context_text}\n\nEND OF CONTEXT"
+#
+#                     try:
+#                         # --- 🐢 THE SLOW LLM CALL (500s+) ---
+#                         ai_result = grade_student_answer(
+#                             question=q_details.get("question", ""),
+#                             student_answer=user_ans,
+#                             context_text=formatted_context,
+#                             max_marks=q_details.get("marks", 5)
+#                         )
+#
+#                         if ai_result.get("success"):
+#                             # Normalize score
+#                             raw_score = ai_result.get("suggested_mark") or ai_result.get("total_score") or 0
+#
+#                             # --- UPDATE DB ROW ---
+#                             # This updates just this specific question in the array
+#                             update_question_result_in_db(
+#                                 attemptId=attemptId,
+#                                 questionId=qid,
+#                                 ai_score=raw_score,
+#                                 ai_feedback=ai_result.get("grading_feedback", "Feedback generated."),
+#                                 status="graded"
+#                             )
+#                             print(f"[BG] ✅ Graded Question {qid}")
+#                         else:
+#                             print(f"[BG] ❌ AI Grading failed for {qid}: {ai_result.get('error')}")
+#
+#                     except Exception as e:
+#                         print(f"[BG] ⚠️ Auto-grading exception for {qid}: {e}")
+#
+#         # --- FINALIZE ---
+#             # --- FINALIZE ---
+#             finalize_submission_status(attemptId)
+#             print(f"[BG] 🏁 Grading complete for Attempt: {attemptId}")
+#
+#             # 🔔 NEW: Send Notification
+#             # We need userId here. You might need to pass userId into background_grader args
+#             # or fetch it from the attemptId payload.
+#             # Ideally, pass userId into background_grader from the submit_test route.
+#
+#             # Fetch result details for the notification text
+#             final_score_res = fetch_submitted_test_by_testId(None)  # You might need a fetch_by_attempt_id helper
+#
+#             # For now, let's assume you pass userId to background_grader
+#             # Update threading args in submit_test: args=(attemptId, answers, question_map, userId, testTitle)
+#
+#             send_push_notification(
+#                 user_id=userId,  # Make sure this variable is available
+#                 title="Grading Complete! 📝",
+#                 body=f"Your test '{testTitle}' has been graded by AI.",
+#                 data={
+#                     "type": "grading_complete",
+#                     "attemptId": attemptId
+#                 }
+#             )
+
+
+def background_grader(attemptId, answers, question_map, userId, testTitle):
     """
     Runs in a background thread to grade descriptive questions
     and update the database incrementally.
@@ -1048,211 +991,24 @@ def background_grader(attemptId, answers, question_map):
                         print(f"[BG] ⚠️ Auto-grading exception for {qid}: {e}")
 
         # --- FINALIZE ---
-        # Re-calculate total score and mark attempt as 'complete'
         finalize_submission_status(attemptId)
         print(f"[BG] 🏁 Grading complete for Attempt: {attemptId}")
 
-    except Exception as e:
-        print(f"[BG] 💀 Background thread crashed: {e}")
+        # 🔔 NEW: Send Notification
+        send_push_notification(
+            user_id=userId,
+            title="Grading Complete! 📝",
+            body=f"Your test '{testTitle}' has been graded by AI.",
+            data={
+                "type": "grading_complete",
+                "attemptId": attemptId
+            }
+        )
+
+    except Exception as e:  # <--- THIS WAS MISSING
+        print(f"[BG] ❌ CRITICAL ERROR in background grader: {e}")
 
 
-
-
-#
-# @app.route("/tests/submit", methods=["POST"])
-# def submit_test():
-#     """
-#     Final Submission Endpoint.
-#     - Matches User's JSON structure.
-#     - Uses 'linkedSourceId' to find context.
-#     - Grades MCQs numerically.
-#     - Descriptive/HTR: Stores AI textual feedback without affecting score.
-#     """
-#     try:
-#         # 1. Parse JSON Data
-#         data = request.get_json(silent=True) or {}
-#
-#         userId = data.get("userId")
-#         testId = data.get("testId")
-#         testTitle = data.get("testTitle")
-#         timeSpent = data.get("timeSpent")
-#         totalTime = data.get("totalTime")
-#         answers = data.get("answers", [])
-#
-#         if not all([userId, testId]):
-#             return jsonify({"error": "Missing required fields: userId, testId"}), 400
-#
-#         submittedAt = datetime.now().isoformat()
-#
-#         # 2. Fetch Test Metadata (The JSON you provided above comes from here)
-#         test_data = fetch_test_by_testId(testId)
-#         if not test_data:
-#             return jsonify({"error": "Test not found"}), 404
-#
-#         questions = test_data.get("questions", [])
-#         if isinstance(questions, str):
-#             questions = json.loads(questions)
-#
-#         # Map for O(1) lookup
-#         question_map = {str(q.get("questionId")): q for q in questions if q.get("questionId")}
-#
-#         # 3. Grading & Analysis Containers
-#         totalQuestions = len(questions)
-#         total_correct = 0
-#         total_mcq = 0
-#         total_descriptive = 0
-#         mcq_correct = 0
-#
-#         results = []
-#         ai_feedback_report = {}
-#         subject_analysis = {}
-#         concept_analysis = {}
-#
-#         # 4. PROCESS ANSWERS
-#         for ans in answers:
-#             qid = str(ans.get("questionId"))
-#             user_ans = ans.get("your_answer", "")
-#
-#             # Fetch Master Data from your JSON structure
-#             q_details = question_map.get(qid)
-#             if not q_details: continue
-#
-#             # Extract Tags
-#             subj_label = (q_details.get("predicted_subject") or {}).get("label", "General")
-#             conc_label = (q_details.get("predicted_concept") or {}).get("label", "General")
-#
-#             if subj_label not in subject_analysis: subject_analysis[subj_label] = {"total": 0, "correct": 0}
-#             if conc_label not in concept_analysis: concept_analysis[conc_label] = {"total": 0, "correct": 0}
-#
-#             subject_analysis[subj_label]["total"] += 1
-#             concept_analysis[conc_label]["total"] += 1
-#
-#             q_type = (q_details.get("question_type") or "MCQ").upper()
-#
-#             # --- A. MCQ Logic ---
-#             if q_type == "MCQ":
-#                 total_mcq += 1
-#                 correct_ans = q_details.get("options", {}).get(
-#                     q_details.get("answer", ""))  # Handle option mapping if needed, or direct match
-#                 # Fallback: if 'answer' is direct value (like '4')
-#                 if not correct_ans:
-#                     correct_ans = q_details.get("answer")
-#
-#                 is_correct = (normalize_answer(str(user_ans)) == normalize_answer(str(correct_ans)))
-#
-#                 if is_correct:
-#                     total_correct += 1
-#                     mcq_correct += 1
-#                     subject_analysis[subj_label]["correct"] += 1
-#                     concept_analysis[conc_label]["correct"] += 1
-#
-#                 results.append(OrderedDict([
-#                     ("questionId", qid),
-#                     ("question", q_details.get("question", "")),
-#                     ("subject", subj_label),
-#                     ("concept", conc_label),
-#                     ("question_type", "MCQ"),
-#                     ("your_answer", user_ans),
-#                     ("correct_answer", correct_ans),
-#                     ("is_correct", is_correct),
-#                     ("status", "graded")
-#                 ]))
-#
-#             # --- B. Descriptive / HTR Logic ---
-#             else:
-#                 total_descriptive += 1
-#
-#                 # ✅ CRITICAL FIX: Look for 'linkedSourceId' based on your JSON
-#                 source_id = q_details.get("linkedSourceId") or q_details.get("sourceId")
-#
-#                 grading_status = "pending_grading"
-#                 ai_feedback_text = "No feedback generated."
-#
-#                 # Check: Source ID + Answer exists?
-#                 if source_id and user_ans and len(str(user_ans)) > 1:
-#                     print(f"[INFO] Fetching context for SourceID: {source_id}")
-#                     context_text = fetch_full_source_text(source_id)
-#
-#                     if context_text:
-#                         formatted_context = f"STORY CONTEXT:\n{context_text}\n\nEND OF CONTEXT"
-#                         try:
-#                             # 1. CALL AI GRADER
-#                             ai_result = grade_student_answer(
-#                                 question=q_details.get("question", ""),
-#                                 student_answer=user_ans,
-#                                 context_text=formatted_context,
-#                                 max_marks=q_details.get("marks", 5)
-#                             )
-#
-#                             # 2. STORE FEEDBACK
-#                             if ai_result.get("success"):
-#                                 grading_status = "graded"
-#                                 ai_feedback_text = ai_result.get("grading_feedback", "No feedback text.")
-#                                 ai_feedback_report[qid] = ai_result
-#                             else:
-#                                 print(f"[WARN] AI Grading failed for {qid}: {ai_result.get('error')}")
-#
-#                         except Exception as e:
-#                             print(f"[ERROR] Auto-grading error QID {qid}: {e}")
-#                     else:
-#                         print(f"[WARN] No text found for SourceID: {source_id}")
-#
-#                 results.append(OrderedDict([
-#                     ("questionId", qid),
-#                     ("question", q_details.get("question", "")),
-#                     ("subject", subj_label),
-#                     ("concept", conc_label),
-#                     ("question_type", "DESCRIPTIVE"),
-#                     ("your_answer", user_ans),
-#                     ("correct_answer", "See AI Feedback"),
-#                     ("is_correct", None),
-#                     ("ai_score", 0),
-#                     ("ai_feedback", ai_feedback_text),
-#                     ("status", grading_status)
-#                 ]))
-#
-#         # 5. Final Calculations
-#         final_score = round((total_correct / totalQuestions * 100), 2) if totalQuestions > 0 else 0.0
-#
-#         pending_count = sum(1 for r in results if r["status"] == "pending_grading")
-#         final_status = "partial" if pending_count > 0 else "complete"
-#
-#         # 6. Store Submission
-#         is_stored, attemptId = store_submitted_test(
-#             userId=userId,
-#             testId=testId,
-#             testTitle=testTitle,
-#             timeSpent=timeSpent,
-#             totalTime=totalTime,
-#             submittedAt=submittedAt,
-#             detailed_results=results,
-#             score=final_score,
-#             total_questions=totalQuestions,
-#             total_correct=total_correct,
-#             total_mcq=total_mcq,
-#             total_descriptive=total_descriptive,
-#             mcq_correct=mcq_correct,
-#             subject_analysis=subject_analysis,
-#             concept_analysis=concept_analysis,
-#             grading_status=final_status,
-#             ai_feedback=ai_feedback_report
-#         )
-#
-#         if not is_stored:
-#             return jsonify({"error": "Failed to store submission"}), 500
-#
-#         return jsonify({
-#             "message": "Submission processed successfully",
-#             "attemptId": attemptId,
-#             "score": final_score,
-#             "grading_status": final_status,
-#             "results": results,
-#             "ai_feedback": ai_feedback_report
-#         }), 201
-#
-#     except Exception as e:
-#         print(f"[ERROR] /tests/submit: {e}")
-#         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/tests/submit", methods=["POST"])
@@ -1397,7 +1153,7 @@ def submit_test():
         if total_descriptive > 0:
             thread = threading.Thread(
                 target=background_grader,
-                args=(attemptId, answers, question_map)
+                args=(attemptId, answers, question_map, userId, testTitle)  # <--- Added args
             )
             thread.start()
 
@@ -2586,6 +2342,43 @@ def handwritten_text_recognition():
         # 6. Cleanup: Remove the temp file
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+
+
+
+
+#============================================================================
+#FIREBASE NOTIFICATION SERVICE
+#=============================================================================
+
+
+@app.route("/user/fcm-token", methods=["POST"])
+def update_fcm_token():
+    """
+    Saves the user's FCM device token to Qdrant (User collection or Metadata).
+    Expected payload: { "userId": "...", "fcmToken": "..." }
+    """
+    data = request.json
+    user_id = data.get("userId")
+    token = data.get("fcmToken")
+
+    if not user_id or not token:
+        return jsonify({"error": "userId and fcmToken required"}), 400
+
+    # Store this in Qdrant.
+    # Since you don't have a dedicated Users collection yet, we can update
+    # user metadata in a utility function or create a simple lookup.
+    # For now, let's create a helper function in vector_db.py.
+    from vector_db import store_user_fcm_token
+    success = store_user_fcm_token(user_id, token)
+
+    if success:
+        return jsonify({"message": "Token updated"}), 200
+    else:
+        return jsonify({"error": "Failed to update token"}), 500
+
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)
