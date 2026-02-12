@@ -2691,3 +2691,52 @@ def fetch_user_public_banks(userId):
         })
 
     return results
+
+
+def search_marketplace_banks(query_text: str, limit: int = 5):
+    """
+    Performs a semantic search on Public Question Banks using FastEmbed.
+    """
+    try:
+        # 1. Convert text query to vector
+        # Your 'embed' function already handles FastEmbed logic and returns a list of lists.
+        # We take [0] because we are embedding a single query string.
+        query_vector = embed(query_text)[0]
+
+        # 2. Filter: Only search banks that are PUBLIC
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="public", match=models.MatchValue(value=True))
+            ]
+        )
+
+        # 3. Perform Vector Search
+        hits = client.search(
+            collection_name=COLLECTION_MCQ,
+            query_vector=query_vector,
+            query_filter=search_filter,
+            limit=limit,
+            with_payload=True
+        )
+
+        results = []
+        for hit in hits:
+            payload = hit.payload
+
+            # Optional: You can skip the 'totalQuestions' count here for speed,
+            # or include it if your UI needs it immediately.
+            results.append({
+                "generatedQAId": payload.get("generatedQAId"),
+                "title": payload.get("title", "Untitled"),
+                "description": payload.get("description", ""),
+                "userName": payload.get("userName", "Unknown"),
+                "isDownloaded": False,  # Search results are generic
+                "linkedSourceId": payload.get("linkedSourceId"),
+                "score": hit.score  # Return score for relevance debugging
+            })
+
+        return results
+
+    except Exception as e:
+        print(f"[ERROR] search_marketplace_banks: {e}")
+        return []

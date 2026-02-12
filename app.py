@@ -111,7 +111,7 @@ from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_sess
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, update_question_result_in_db,finalize_submission_status, fetch_user_public_banks
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks
 
 
 from werkzeug.utils import secure_filename
@@ -2423,6 +2423,31 @@ def get_public_banks_by_user(userId):
         print(f"[ERROR] get_public_banks_by_user: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+
+
+
+@app.route("/search/marketplace", methods=["GET"])
+def search_marketplace_api():
+    """
+    Endpoint for real-time semantic search.
+    Usage: /search/marketplace?q=physics
+    """
+    query = request.args.get("q")
+
+    # 1. Handle empty/short queries to save resources
+    if not query or len(query.strip()) < 2:
+        return jsonify([]), 200
+
+    try:
+        # 2. Perform search
+        # This will use the FastEmbed model loaded in your backend
+        results = search_marketplace_banks(query, limit=10)
+        return jsonify(results), 200
+
+    except Exception as e:
+        print(f"[ERROR] Search API failed: {e}")
+        return jsonify({"error": "Search failed"}), 500
 
 
 
