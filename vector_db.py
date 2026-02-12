@@ -8,6 +8,7 @@ from drive_uploader import load_env
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from qdrant_client import QdrantClient, models
+from fastembed import TextEmbedding
 
 load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
@@ -26,6 +27,7 @@ COLLECTION_SOURCES = "source_materials_collection"
 COLLECTION_USERS = "users_collection"
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
+embedding_model = TextEmbedding()
 
 def ensure_collections():
     try:
@@ -130,7 +132,12 @@ ensure_collections()
 def embed(texts):
     if isinstance(texts, str):
         texts = [texts]
-    return [np.random.rand(VECTOR_DIM).tolist() for _ in texts]
+    
+    # Generate embeddings using FastEmbed
+    # It returns a generator of numpy arrays, so we convert them to lists of floats
+    embeddings = embedding_model.embed(texts)
+    
+    return [e.tolist() for e in embeddings]
 
 def _to_payload_for_bank(meta: Dict[str, Any]):
     p = dict(meta)
