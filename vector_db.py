@@ -8,6 +8,7 @@ from drive_uploader import load_env
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from qdrant_client import QdrantClient, models
+from sentence_transformers import SentenceTransformer
 load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
 QDRANT_URL =os.environ.get("QDRANT_URL")  # change to your cluster URL
@@ -2632,3 +2633,54 @@ def get_user_fcm_token(user_id):
     except Exception as e:
         print(f"Error fetching FCM token: {e}")
         return None
+
+
+def fetch_user_public_banks(userId):
+    """
+    Fetches only the question banks for a specific user that are marked as public.
+    Useful for viewing a user's public profile.
+    """
+    userIdClean = str(userId).strip().lower()
+
+    # Filter: Must match User ID AND Must be Public
+    search_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+            models.FieldCondition(key="public", match=models.MatchValue(value=True))
+        ]
+    )
+
+    # Scroll through the MCQ collection
+    banks, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=search_filter,
+        limit=100,  # Adjust limit as needed
+        with_payload=True
+    )
+
+    results = []
+    for b in banks:
+        gen_id = b.payload.get("generatedQAId")
+
+        # Optional: Get the real-time question count for the UI
+        # If performance is slow, you can remove this count query
+        count = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+            )
+        ).count
+
+        results.append({
+            "generatedQAId": gen_id,
+            "title": b.payload.get("title", "Untitled"),
+            "description": b.payload.get("description", ""),
+            "userName": b.payload.get("userName", ""),
+            "createdAt": b.payload.get("createdAt"),
+            "totalQuestions": count,
+            "isPublic": True,
+            "userId": userIdClean,
+            "linkedSourceId": b.payload.get("linkedSourceId")
+        })
+
+    return results
