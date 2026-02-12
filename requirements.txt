@@ -6,3 +6,4 @@ numpy
 werkzeug
 qdrant-client== 1.15.1
 firebase-admin
+sentence-transformers
