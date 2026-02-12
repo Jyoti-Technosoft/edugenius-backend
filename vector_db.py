@@ -8,7 +8,7 @@ from drive_uploader import load_env
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from qdrant_client import QdrantClient, models
-from sentence_transformers import SentenceTransformer
+
 load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
 QDRANT_URL =os.environ.get("QDRANT_URL")  # change to your cluster URL
