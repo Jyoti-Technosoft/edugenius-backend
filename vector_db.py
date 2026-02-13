@@ -2274,30 +2274,120 @@ def create_indexes():
 
 #=======================================================================================================
 
-def store_source_material(userId, title, text_chunks):
+# def store_source_material(userId, title, text_chunks):
+#     """
+#     Stores a PDF source.
+#     :param userId: Owner ID
+#     :param title: Filename or Title of the PDF
+#     :param text_chunks: List of dicts, e.g., [{'text': '...', 'page': 1}, ...]
+#     """
+#     try:
+#         userIdClean = str(userId).strip().lower()
+#         sourceId = str(uuid.uuid4())
+#         createdAt = datetime.now().isoformat()
+#
+#         # 1. Store the "File Header" (Metadata)
+#         # We use the sourceId as the point ID for easy retrieval of the file list
+#         meta_payload = {
+#             "userId": userIdClean,
+#             "sourceId": sourceId,
+#             "title": title,
+#             "createdAt": createdAt,
+#             "type": "FILE_METADATA",  # Distinguishes header from content
+#             "chunk_count": len(text_chunks)
+#         }
+#
+#         # Create a vector for the title (to allow searching for files by name)
+#         header_vec = embed(title)[0]
+#
+#         header_point = models.PointStruct(
+#             id=sourceId,
+#             vector=header_vec,
+#             payload=_to_payload_for_source(meta_payload)
+#         )
+#
+#         # 2. Process Text Chunks
+#         points = []
+#         BATCH_SIZE = 100
+#
+#         # Extract just the text for embedding
+#         texts_to_embed = [chunk['text'] for chunk in text_chunks]
+#         vectors = embed(texts_to_embed)  # Assumes embed() handles list of strings
+#
+#         for i, chunk in enumerate(text_chunks):
+#             chunkId = str(uuid.uuid4())
+#
+#             chunk_payload = {
+#                 "userId": userIdClean,
+#                 "sourceId": sourceId,
+#                 "type": "CONTENT_CHUNK",
+#                 "text": chunk.get('text', ''),
+#                 "page": chunk.get('page', 1),
+#                 "index": i,
+#                 "parent_title": title
+#             }
+#
+#             p = models.PointStruct(
+#                 id=chunkId,
+#                 vector=vectors[i],
+#                 payload=_to_payload_for_source(chunk_payload)
+#             )
+#             points.append(p)
+#
+#             # Batch upsert to prevent network timeouts on large files
+#             if len(points) >= BATCH_SIZE:
+#                 client.upsert(collection_name=COLLECTION_SOURCES, points=points)
+#                 points = []
+#
+#         # Upsert remaining points
+#         if points:
+#             client.upsert(collection_name=COLLECTION_SOURCES, points=points)
+#
+#         # Upsert the header last
+#         client.upsert(collection_name=COLLECTION_SOURCES, points=[header_point])
+#
+#         print(f"[INFO] Stored source '{title}' with {len(text_chunks)} chunks.")
+#         return sourceId
+#
+#     except Exception as e:
+#         print(f"[ERROR] store_source_material: {e}")
+#         return None
+
+# vector_db.py
+
+def store_source_material(userId, title, text_chunks, class_name=None, subject=None, is_system=False):
     """
-    Stores a PDF source.
+    Stores a PDF source with optional hierarchy tags.
     :param userId: Owner ID
-    :param title: Filename or Title of the PDF
-    :param text_chunks: List of dicts, e.g., [{'text': '...', 'page': 1}, ...]
+    :param title: Filename (or Chapter Name)
+    :param text_chunks: List of dicts
+    :param class_name: e.g. "Class 10" (Optional)
+    :param subject: e.g. "Physics" (Optional)
+    :param is_system: Bool - True if this is a global 'System' file, False if personal.
     """
     try:
         userIdClean = str(userId).strip().lower()
         sourceId = str(uuid.uuid4())
         createdAt = datetime.now().isoformat()
 
+        # Determine category: "SYSTEM" for the curated DB, "USER" for personal uploads
+        category = "SYSTEM" if is_system else "USER"
+
         # 1. Store the "File Header" (Metadata)
-        # We use the sourceId as the point ID for easy retrieval of the file list
         meta_payload = {
             "userId": userIdClean,
             "sourceId": sourceId,
             "title": title,
             "createdAt": createdAt,
-            "type": "FILE_METADATA",  # Distinguishes header from content
-            "chunk_count": len(text_chunks)
+            "type": "FILE_METADATA",
+            "chunk_count": len(text_chunks),
+            # New Hierarchy Fields
+            "category": category,
+            "class_name": class_name,  # Can be None
+            "subject": subject  # Can be None
         }
 
-        # Create a vector for the title (to allow searching for files by name)
+        # Create a vector for the title
         header_vec = embed(title)[0]
 
         header_point = models.PointStruct(
@@ -2310,9 +2400,9 @@ def store_source_material(userId, title, text_chunks):
         points = []
         BATCH_SIZE = 100
 
-        # Extract just the text for embedding
+        # Extract text for embedding
         texts_to_embed = [chunk['text'] for chunk in text_chunks]
-        vectors = embed(texts_to_embed)  # Assumes embed() handles list of strings
+        vectors = embed(texts_to_embed)
 
         for i, chunk in enumerate(text_chunks):
             chunkId = str(uuid.uuid4())
@@ -2324,7 +2414,9 @@ def store_source_material(userId, title, text_chunks):
                 "text": chunk.get('text', ''),
                 "page": chunk.get('page', 1),
                 "index": i,
-                "parent_title": title
+                "parent_title": title,
+                # Store context here too for better RAG filtering later if needed
+                "subject_context": subject
             }
 
             p = models.PointStruct(
@@ -2334,7 +2426,7 @@ def store_source_material(userId, title, text_chunks):
             )
             points.append(p)
 
-            # Batch upsert to prevent network timeouts on large files
+            # Batch upsert
             if len(points) >= BATCH_SIZE:
                 client.upsert(collection_name=COLLECTION_SOURCES, points=points)
                 points = []
@@ -2346,7 +2438,7 @@ def store_source_material(userId, title, text_chunks):
         # Upsert the header last
         client.upsert(collection_name=COLLECTION_SOURCES, points=[header_point])
 
-        print(f"[INFO] Stored source '{title}' with {len(text_chunks)} chunks.")
+        print(f"[INFO] Stored '{title}' (Category: {category}, Class: {class_name}, Sub: {subject})")
         return sourceId
 
     except Exception as e:
@@ -2355,14 +2447,17 @@ def store_source_material(userId, title, text_chunks):
 
 
 def fetch_user_sources(userId):
-    """Returns a list of uploaded PDF files (metadata only)."""
+    """
+    Returns a list of PERSONAL uploaded files (excludes System files).
+    """
     userIdClean = str(userId).strip().lower()
 
-    # Filter for the "FILE_METADATA" type we created in step 4
+    # Filter: userId match AND Type=FILE_METADATA AND Category=USER
     filt = models.Filter(
         must=[
             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
-            models.FieldCondition(key="type", match=models.MatchValue(value="FILE_METADATA"))
+            models.FieldCondition(key="type", match=models.MatchValue(value="FILE_METADATA")),
+            models.FieldCondition(key="category", match=models.MatchValue(value="USER"))
         ]
     )
 
@@ -2385,6 +2480,49 @@ def fetch_user_sources(userId):
         })
     return sources
 
+
+def get_system_hierarchy():
+    """
+    Fetches ALL 'System' source metadata to build the Class->Subject->Chapter tree.
+    Used for populating Flutter dropdowns.
+    """
+    # Filter: Type=FILE_METADATA AND Category=SYSTEM
+    filt = models.Filter(
+        must=[
+            models.FieldCondition(key="type", match=models.MatchValue(value="FILE_METADATA")),
+            models.FieldCondition(key="category", match=models.MatchValue(value="SYSTEM"))
+        ]
+    )
+
+    # Scroll to get all system headers (up to 10k)
+    results, _ = client.scroll(
+        collection_name=COLLECTION_SOURCES,
+        scroll_filter=filt,
+        limit=10000,
+        with_payload=True,
+        with_vectors=False
+    )
+
+    # Build Tree: { "Class 10": { "Physics": [ {title, sourceId}... ] } }
+    hierarchy = {}
+
+    for r in results:
+        p = r.payload
+        c_name = p.get("class_name", "Uncategorized")
+        subj = p.get("subject", "General")
+
+        if c_name not in hierarchy:
+            hierarchy[c_name] = {}
+        if subj not in hierarchy[c_name]:
+            hierarchy[c_name][subj] = []
+
+        hierarchy[c_name][subj].append({
+            "title": p.get("title"),
+            "sourceId": p.get("sourceId"),
+            "createdAt": p.get("createdAt")
+        })
+
+    return hierarchy
 
 def delete_source_material(sourceId):
     """Deletes a file and ALL its text chunks."""
