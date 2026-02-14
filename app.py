@@ -47,20 +47,6 @@ from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_gradin
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ADMIN_USER_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"
 
 
@@ -80,22 +66,6 @@ MODEL OPTIONS
 app = Flask(__name__)
 
 CORS(app)
-# CORS(
-#     app,
-#     resources={r"/*": {
-#         "origins": "https://edugenius-n679.onrender.com"
-#     }},
-#     supports_credentials=True,
-#     allow_headers=["Content-Type", "Authorization"],
-#     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-# )
-
-# Simplified, more robust configuration
-# CORS(app,
-#      origins=["https://edugenius-n679.onrender.com"],
-#      supports_credentials=True,
-#      allow_headers=["Content-Type", "Authorization"],
-#      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 from collections import OrderedDict
 
@@ -107,13 +77,28 @@ Helper Functions
 ====================================================================
 """
 
-from vector_db import store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_session, fetch_test_by_testId, \
+from vector_db import (store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_session, fetch_test_by_testId, \
     test_sessions_by_userId, store_submitted_test, submitted_tests_by_userId, add_single_question, \
     update_single_question, delete_single_question, store_mcqs_for_manual_creation, delete_mcq_bank, \
     delete_submitted_test_by_id, delete_test_session_by_id, update_test_session, update_question_bank_metadata, \
-    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer,fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, embed, _extract_payload, add_subscription_record, fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy
+    fetch_submitted_test_by_testId, delete_submitted_test_attempt, update_answer_flag_in_qdrant, normalize_answer, \
+    fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, _extract_payload, add_subscription_record, \
+    fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, \
+    initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, \
+    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy)
 
 
+from werkzeug.utils import secure_filename
+
+from flask import Flask, request, jsonify, Response
+from datetime import datetime
+from werkzeug.utils import secure_filename
+
+import threading
+import uuid
+import json
+from flask import Flask, request, jsonify, Response
+from datetime import datetime
 from werkzeug.utils import secure_filename
 
 
@@ -193,76 +178,30 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 #
 # ===============================
 
-# @app.route("/question-banks/upload", methods=["POST"])
-# def upload_pdf():
-#     print(f"\n[START] /create_question_bank request received")
-#
-#     # 1. Validate inputs
-#     user_id = request.form.get("userId")
-#     user_name = request.form.get("userName", "User")
-#     title = request.form.get("title")
-#     description = request.form.get("description")
-#     pdf_file = request.files.get("pdf")
-#
-#     print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
-#     if not pdf_file:
-#         return jsonify({"error": "PDF file not provided"}), 400
-#
-#     if not all([user_id, title, description]):
-#         return jsonify({"error": "userId, title, description are required"}), 400
-#
-#     # 2. Keep PDF in memory (no Drive)
-#     print("[STEP] Reading PDF into memory...")
-#     pdf_bytes = pdf_file.read()
-#     pdf_name = secure_filename(pdf_file.filename)
-#
-#     # 3. Directly call model
-#     print("[STEP] Calling LayoutLM model directly (no Drive)...")
-#     # final_data = call_layoutlm_api(pdf_bytes, pdf_name)
-#     try:
-#
-#         final_data = latex_model(pdf_bytes, pdf_name)
-#     except Exception as e:
-#         print("[ERROR] latex_model failed → switching to YOLO model")
-#         print("Reason:", e)
-#         final_data = call_yolo_api(pdf_bytes, pdf_name)
-#
-#     # 4. Add index to MCQs
-#     indexed_mcqs = [
-#         {
-#             **mcq,
-#             "documentIndex": i,
-#             "questionId": str(uuid.uuid4())  # ✅ assign unique ID
-#         }
-#         for i, mcq in enumerate(final_data)
-#     ]
-#
-#     # 5. Store in vector DB
-#     print("[STEP] Storing Question Bank in vector database...")
-#     createdAtTimestamp = datetime.now().isoformat()
-#     stored_id, all_have_answers = store_mcqs(
-#         user_id,user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
-#     )
-#     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
-#
-#     print("[END] Request complete\n")
-#     return Response(
-#         json.dumps({
-#             "generatedQAId": stored_id,
-#             "userId": user_id,
-#             "userName": user_name,
-#             "fileName": pdf_name,
-#             "createdAt": createdAtTimestamp,
-#             "answerFound": all_have_answers
-#         }, ensure_ascii=False),
-#         mimetype="application/json"
-#     )
 
 
+from vector_db import get_user_fcm_token
 
-from flask import Flask, request, jsonify, Response
-from datetime import datetime
-from werkzeug.utils import secure_filename
+def send_push_notification(user_id, title, body, data=None):
+    token = get_user_fcm_token(user_id)
+    if not token:
+        print(f"[WARN] No FCM token found for user {user_id}")
+        return
+
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data=data or {},
+            token=token,
+        )
+        response = messaging.send(message)
+        print(f"[INFO] Notification sent: {response}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send notification: {e}")
+
 
 
 
@@ -316,9 +255,32 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
         }
         print(f"[THREAD SUCCESS] Job {job_id} stored with id={stored_id}")
 
+
+        send_push_notification(
+            user_id=user_id,
+            title="Processing Complete! ✅",
+            body=f"Your file '{pdf_name}' is ready. {len(indexed_mcqs)} questions generated.",
+            data={
+                "type": "upload_complete",
+                "jobId": job_id,
+                "generatedQAId": stored_id
+            }
+        )
+
     except Exception as e:
         print(f"[THREAD ERROR] Job {job_id} failed: {str(e)}")
         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+
+        send_push_notification(
+            user_id=user_id,
+            title="Processing Failed ❌",
+            body=f"We couldn't process '{pdf_name}'. Please try again.",
+            data={
+                "type": "upload_failed",
+                "jobId": job_id,
+                "error": str(e)
+            }
+        )
 
 
 @app.route("/question-banks/upload", methods=["POST"])
@@ -427,77 +389,9 @@ def analyze_pdf():
         return jsonify({"error": f"Document analysis failed: {e}"}), 500
 
 
-#
-# @app.route("/question-banks/upload/images", methods=["POST"])
-# def upload_image():
-#     print("\n[START] /create_question_bank request received")
-#
-#     # 1. Validate inputs
-#     user_id = request.form.get("userId")
-#     user_name = request.form.get("userName", "User")
-#     title = request.form.get("title")
-#     description = request.form.get("description")
-#     image_files = request.files.getlist("image")  # ✅ multiple images
-#
-#     print(f"[INFO] Received form-data: userId={user_id}, title={title}, description={description}")
-#     if not image_files or len(image_files) == 0:
-#         return jsonify({"error": "No image file(s) provided"}), 400
-#
-#     if not all([user_id, title, description]):
-#         return jsonify({"error": "userId, title, description are required"}), 400
-#
-#     all_results = []
-#
-#     # 2. Loop through each image
-#     for idx, img_file in enumerate(image_files, start=1):
-#         print(f"[STEP] Reading image {idx}/{len(image_files)} into memory...")
-#         file_bytes = img_file.read()
-#         filename = secure_filename(img_file.filename)
-#
-#         # 3. Directly call model for each image
-#         print(f"[STEP] Calling LayoutLM model for {filename} ...")
-#         try:
-#             result = latex_model(file_bytes, filename)
-#             print(f"[SUCCESS] Model returned result for {filename}")
-#             if isinstance(result, list):
-#                 all_results.extend(result)
-#             else:
-#                 all_results.append(result)
-#         except Exception as e:
-#             print(f"[ERROR] Failed on {filename}: {e}")
-#
-#     # 4. Add index to MCQs
-#     indexed_mcqs = [
-#         {**mcq, "documentIndex": i}
-#         for i, mcq in enumerate(all_results)
-#     ]
-#
-#     # 5. Store in vector DB
-#     print("[STEP] Storing Question Bank in vector database...")
-#     createdAtTimestamp = datetime.now().isoformat()
-#     stored_id = store_mcqs(
-#         user_id, user_name, title, description, indexed_mcqs, "multiple_images.zip", createdAtTimestamp
-#     )
-#     print(f"[SUCCESS] Stored with generatedQAId={stored_id}")
-#
-#     print("[END] Request complete\n")
-#     return Response(
-#         json.dumps({
-#             "generatedQAId": stored_id,
-#             "userId": user_id,
-#             "fileCount": len(image_files),
-#             "createdAt": createdAtTimestamp,
-#         }, ensure_ascii=False),
-#         mimetype="application/json"
-#     )
 
 
-import threading
-import uuid
-import json
-from flask import Flask, request, jsonify, Response
-from datetime import datetime
-from werkzeug.utils import secure_filename
+
 
 
 # Reuse the same status dictionary we set up for the PDF logic
@@ -552,9 +446,30 @@ def background_image_task(job_id, user_id, user_name, title, description, image_
         }
         print(f"[THREAD SUCCESS] Image Job {job_id} stored with id={stored_id}")
 
+        send_push_notification(
+            user_id=user_id,
+            title="Images Processed! 📸",
+            body=f"Your {len(image_data_list)} images have been converted into questions.",
+            data={
+                "type": "upload_complete",
+                "jobId": job_id,
+                "generatedQAId": stored_id
+            }
+        )
+
     except Exception as e:
         print(f"[THREAD ERROR] Image Job {job_id} failed: {str(e)}")
         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+
+        send_push_notification(
+            user_id=user_id,
+            title="Image Processing Failed ❌",
+            body="We encountered an error processing your images.",
+            data={
+                "type": "upload_failed",
+                "jobId": job_id
+            }
+        )
 
 
 @app.route("/question-banks/upload/images", methods=["POST"])
@@ -600,38 +515,6 @@ def upload_image():
         "jobId": job_id,
         "message": f"Processing {len(image_data_list)} images in background."
     }), 202
-
-
-# @app.route("/question-banks", methods=["GET"])
-# def get_question_banks_by_user():
-#     userId = request.args.get("userId")  # ✅ GET query params
-#
-#     if not userId:
-#         return jsonify({"error": "userId is required"}), 400
-#
-#     mcqs_data = fetch_mcqs(userId=userId)
-#     if not mcqs_data:
-#         return jsonify({"message": "No Paper Sets found"})
-#
-#     # FIX: Iterate through each paper set and sort its MCQs list
-#     for paper_set in mcqs_data:
-#         # Check if the 'mcqs' list exists and is iterable
-#         if paper_set.get('metadata', {}).get('mcqs'):
-#             mcqs_list = paper_set['metadata']['mcqs']
-#
-#             # This handles older data that might have missing or None 'documentIndex' values.
-#             paper_set['metadata']['mcqs'] = sorted(
-#                 mcqs_list,
-#                 key=lambda x: int(x['documentIndex'])
-#                 if x.get('documentIndex') is not None else float('inf')
-#             )
-#             # ===============================================
-#
-#     return Response(
-#         json.dumps(mcqs_data, ensure_ascii=False, indent=4),
-#         mimetype="application/json"
-#     )
-#
 
 
 
@@ -832,121 +715,7 @@ def test_history_by_userId(userId):
 
 
 
-from vector_db import get_user_fcm_token
 
-def send_push_notification(user_id, title, body, data=None):
-    token = get_user_fcm_token(user_id)
-    if not token:
-        print(f"[WARN] No FCM token found for user {user_id}")
-        return
-
-    try:
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title=title,
-                body=body,
-            ),
-            data=data or {},
-            token=token,
-        )
-        response = messaging.send(message)
-        print(f"[INFO] Notification sent: {response}")
-    except Exception as e:
-        print(f"[ERROR] Failed to send notification: {e}")
-
-
-
-
-
-
-#
-# def background_grader(attemptId, answers, question_map, userId, testTitle):
-#     """
-#     Runs in a background thread to grade descriptive questions
-#     and update the database incrementally.
-#     """
-#     print(f"[BG] 🚀 Starting background grading for Attempt: {attemptId}")
-#
-#     try:
-#         # Loop through user answers to find Descriptive ones
-#         for ans in answers:
-#             qid = str(ans.get("questionId"))
-#             user_ans = ans.get("your_answer", "")
-#
-#             # Lookup question details
-#             q_details = question_map.get(qid)
-#             if not q_details: continue
-#
-#             q_type = (q_details.get("question_type") or "MCQ").upper()
-#
-#             # SKIP MCQs (They are already graded)
-#             if q_type == "MCQ":
-#                 continue
-#
-#             # Process Descriptive / HTR
-#             source_id = q_details.get("linkedSourceId") or q_details.get("sourceId")
-#
-#             if source_id and user_ans and len(str(user_ans)) > 1:
-#                 # Fetch Context
-#                 context_text = fetch_full_source_text(source_id)
-#
-#                 if context_text:
-#                     formatted_context = f"STORY CONTEXT:\n{context_text}\n\nEND OF CONTEXT"
-#
-#                     try:
-#                         # --- 🐢 THE SLOW LLM CALL (500s+) ---
-#                         ai_result = grade_student_answer(
-#                             question=q_details.get("question", ""),
-#                             student_answer=user_ans,
-#                             context_text=formatted_context,
-#                             max_marks=q_details.get("marks", 5)
-#                         )
-#
-#                         if ai_result.get("success"):
-#                             # Normalize score
-#                             raw_score = ai_result.get("suggested_mark") or ai_result.get("total_score") or 0
-#
-#                             # --- UPDATE DB ROW ---
-#                             # This updates just this specific question in the array
-#                             update_question_result_in_db(
-#                                 attemptId=attemptId,
-#                                 questionId=qid,
-#                                 ai_score=raw_score,
-#                                 ai_feedback=ai_result.get("grading_feedback", "Feedback generated."),
-#                                 status="graded"
-#                             )
-#                             print(f"[BG] ✅ Graded Question {qid}")
-#                         else:
-#                             print(f"[BG] ❌ AI Grading failed for {qid}: {ai_result.get('error')}")
-#
-#                     except Exception as e:
-#                         print(f"[BG] ⚠️ Auto-grading exception for {qid}: {e}")
-#
-#         # --- FINALIZE ---
-#             # --- FINALIZE ---
-#             finalize_submission_status(attemptId)
-#             print(f"[BG] 🏁 Grading complete for Attempt: {attemptId}")
-#
-#             # 🔔 NEW: Send Notification
-#             # We need userId here. You might need to pass userId into background_grader args
-#             # or fetch it from the attemptId payload.
-#             # Ideally, pass userId into background_grader from the submit_test route.
-#
-#             # Fetch result details for the notification text
-#             final_score_res = fetch_submitted_test_by_testId(None)  # You might need a fetch_by_attempt_id helper
-#
-#             # For now, let's assume you pass userId to background_grader
-#             # Update threading args in submit_test: args=(attemptId, answers, question_map, userId, testTitle)
-#
-#             send_push_notification(
-#                 user_id=userId,  # Make sure this variable is available
-#                 title="Grading Complete! 📝",
-#                 body=f"Your test '{testTitle}' has been graded by AI.",
-#                 data={
-#                     "type": "grading_complete",
-#                     "attemptId": attemptId
-#                 }
-#             )
 
 
 def background_grader(attemptId, answers, question_map, userId, testTitle):
@@ -1354,126 +1123,6 @@ def edit_question_bank(generatedQAId):
         "answerFound": all_have_answers
     }), 200
 
-#
-# @app.route("/question-banks/manual", methods=["POST"])
-# def create_manual_question_bank():
-#     """
-#     API to create a new question bank and populate it with a list of questions
-#     in a single request for a smoother user experience.
-#     """
-#     data = request.get_json(silent=True) or request.form.to_dict()
-#     user_id = data.get("userId")
-#     title = data.get("title")
-#     description = data.get("description")
-#     raw_mcqs = data.get("questions", [])  # Expects a list of question objects
-#
-#     if not all([user_id, title, description]) or not isinstance(raw_mcqs, list):
-#         return jsonify({"error": "userId, title, description, and a list of 'questions' are required"}), 400
-#
-#     if not raw_mcqs:
-#         return jsonify({"error": "Question bank must contain at least one question."}), 400
-#
-#     indexed_mcqs = []
-#
-#     # 1. Format and Index MCQs (similar to your upload_pdf route logic)
-#     for i, mcq in enumerate(raw_mcqs):
-#         # Ensure options are properly formatted (if they come as a dict from the client)
-#         if 'options' in mcq and isinstance(mcq['options'], dict):
-#             # We need to ensure the options are stored as a JSON string
-#             # as required by the ChromaDB metadata constraint (as discovered earlier).
-#             mcq['options'] = json.dumps(mcq['options'])
-#
-#         # NOTE: If your database requires questionId/documentIndex, they must be set here.
-#         # However, we will assume 'store_mcqs_for_manual_creation' handles questionId and documentIndex assignment.
-#         mcq['documentIndex'] = i
-#         mcq['questionId'] = str(uuid.uuid4())
-#         indexed_mcqs.append(mcq)
-#
-#     # 2. Store Metadata and Questions (using a modified store function)
-#     try:
-#         # Create a function similar to store_mcqs but for manual data
-#         generated_qa_id = store_mcqs_for_manual_creation(
-#             user_id,
-#             title,
-#             description,
-#             indexed_mcqs
-#         )
-#     except Exception as e:
-#         print(f"Error storing manual question bank: {e}")
-#         return jsonify({"error": "Failed to create and store question bank"}), 500
-#
-#     return jsonify({
-#         "message": "Question bank created and populated successfully",
-#         "generatedQAId": generated_qa_id,
-#         "userId": user_id,
-#         "title": title,
-#         "questions_count": len(indexed_mcqs)
-#     }), 201
-
-#
-# @app.route("/question-banks/manual", methods=["POST"])
-# def create_manual_question_bank():
-#     """
-#     API to create a new question bank.
-#     Updated to support 'linkedSourceId' for connecting questions to a specific PDF source.
-#     """
-#     data = request.get_json(silent=True) or request.form.to_dict()
-#
-#     # 1. Extract Fields
-#     user_id = data.get("userId")
-#     title = data.get("title")
-#     description = data.get("description")
-#     raw_mcqs = data.get("questions", [])
-#
-#     # --- NEW: Get the source ID if it exists ---
-#     linked_source_id = data.get("linkedSourceId")
-#     # -------------------------------------------
-#
-#     if not all([user_id, title, description]) or not isinstance(raw_mcqs, list):
-#         return jsonify({"error": "userId, title, description, and a list of 'questions' are required"}), 400
-#
-#     if not raw_mcqs:
-#         return jsonify({"error": "Question bank must contain at least one question."}), 400
-#
-#     indexed_mcqs = []
-#
-#     # 2. Format Questions
-#     for i, mcq in enumerate(raw_mcqs):
-#         if 'options' in mcq and isinstance(mcq['options'], dict):
-#             mcq['options'] = json.dumps(mcq['options'])
-#
-#         mcq['documentIndex'] = i
-#         mcq['questionId'] = str(uuid.uuid4())
-#
-#         # --- NEW: Tag individual questions with the source ID too (Optional but recommended) ---
-#         if linked_source_id:
-#             mcq['linkedSourceId'] = linked_source_id
-#
-#         indexed_mcqs.append(mcq)
-#
-#     # 3. Store Metadata and Questions
-#     try:
-#         # You need to update your store_mcqs_for_manual_creation function in vector_db.py
-#         # to accept this new argument.
-#         generated_qa_id = store_mcqs_for_manual_creation(
-#             user_id,
-#             title,
-#             description,
-#             indexed_mcqs,
-#             linked_source_id=linked_source_id  # <--- PASS IT HERE
-#         )
-#     except Exception as e:
-#         print(f"Error storing manual question bank: {e}")
-#         return jsonify({"error": "Failed to create and store question bank"}), 500
-#
-#     return jsonify({
-#         "message": "Question bank created successfully",
-#         "generatedQAId": generated_qa_id,
-#         "userId": user_id,
-#         "title": title,
-#         "linkedSourceId": linked_source_id,  # Return it so frontend confirms it's linked
-#         "questions_count": len(indexed_mcqs)
-#     }), 201
 
 
 
@@ -1544,13 +1193,7 @@ def create_manual_question_bank():
         "questions_count": len(indexed_mcqs)
     }), 201
 
-# @app.route("/questionId/solution", methods=["POST"])
-# def answer_validator(questionId):
-#     """
-#     API to check validate answers
-#     """
-#     if not questionId:
-#        return jsonify({"error":"questioId is required"}), 400
+
 
 
 
@@ -1995,7 +1638,6 @@ def get_marketplace():
 
 
 
-import threading
 
 @app.route("/user/update-username", methods=["POST"])
 def api_update_username():
