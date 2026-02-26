@@ -1,0 +1,26 @@
+
+# Core Libraries
+torch==2.1.0
+numpy==1.26.4
+scipy==1.15.3
+scikit-learn==1.7.1
+Pillow==10.4.0
+
+# Document/Image Processing & OCR
+
+rapidocr>=3.0.0,<4.0.0
+img2pdf==0.5.1
+PyMuPDF==1.23.2 
+opencv-python-headless
+pytesseract==0.3.13
+
+# Deep Learning / NLP / Vision
+transformers==4.53.3
+ultralytics==8.1.47
+TorchCRF==1.1.0 
+
+
+# Optimization Libraries (Crucial for optimum.onnxruntime)
+optimum==1.27.0 # (From previous context)
+onnxruntime==1.22.1
+onnx==1.16.1
