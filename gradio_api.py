@@ -225,77 +225,162 @@ def call_yolo_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
 
     return {"raw_output": response}
 
-def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
-    """
-    Send an in-memory PDF or image directly to the Hugging Face model (no Drive upload).
-    Supports .pdf, .png, .jpg, .jpeg automatically.
-    """
-    import mimetypes
 
-    load_env()
+
+
+
+
+# def latex_model(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+#     """
+#     Send an in-memory PDF or image directly to the Hugging Face model (no Drive upload).
+#     Supports .pdf, .png, .jpg, .jpeg automatically.
+#     """
+#     import mimetypes
+
+#     load_env()
+#     hf_space = "heerjtdev/layout_latex"
+
+#     if not hf_space:
+#         raise RuntimeError("HF_SPACE not found in .env")
+
+#     print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
+#     try:
+#         client = Client(hf_space)
+#     except Exception as e:
+#         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
+
+#     # ✅ detect correct extension
+#     ext = os.path.splitext(filename)[-1].lower()
+
+#     # ✅ create temp file with same extension
+#     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+#         tmp.write(file_bytes)
+#         tmp_path = tmp.name
+
+#     print(f"[STEP] Sending {filename} ({ext}) to LayoutLM model...")
+
+#     structured_input_list = {
+#         "_type": "gradio.FileData",
+#         "path": tmp_path,
+#         "meta": {
+#             "_type": "gradio.FileData"
+#         }
+#     }
+
+#     try:
+#         response = client.predict([structured_input_list],"", api_name="/process_file")
+#     except Exception as e:
+#         raise ValueError(f"LayoutLM API call failed: {e}")
+#     finally:
+#         try:
+#             os.remove(tmp_path)
+#         except:
+#             pass
+
+#     # ✅ Normalize response
+#     if isinstance(response, (dict, list)):
+#         return response
+
+#     if isinstance(response, tuple):
+#         for item in response:
+#             if isinstance(item, (dict, list)):
+#                 return item
+#             if isinstance(item, str):
+#                 try:
+#                     return json.loads(item)
+#                 except json.JSONDecodeError:
+#                     continue
+#         return {"raw_output": response}
+
+#     if isinstance(response, str):
+#         try:
+#             return json.loads(response)
+#         except json.JSONDecodeError:
+#             return {"raw_output": response}
+
+#     return {"raw_output": response}
+
+
+
+
+import json
+import os
+import tempfile
+from typing import Dict, Any, Generator
+from gradio_client import Client, handle_file
+
+def latex_model(file_bytes: bytes, filename: str) -> Generator[Dict[str, Any], None, None]:
+    """
+    Streams output from the Hugging Face model.
+    Yields {"type": "estimation", "data": ...} first, 
+    then yields {"type": "final", "data": ...} when complete.
+    """
+    # ... assuming load_env() is called elsewhere or here ...
     hf_space = "heerjtdev/layout_latex"
-
-    if not hf_space:
-        raise RuntimeError("HF_SPACE not found in .env")
-
+    
     print(f"[INFO] Connecting to Hugging Face Space: {hf_space}")
     try:
         client = Client(hf_space)
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Hugging Face Space: {e}")
 
-    # ✅ detect correct extension
+    # Detect correct extension
     ext = os.path.splitext(filename)[-1].lower()
 
-    # ✅ create temp file with same extension
+    # Create temp file with same extension
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         tmp.write(file_bytes)
         tmp_path = tmp.name
 
-    print(f"[STEP] Sending {filename} ({ext}) to LayoutLM model...")
-
-    structured_input_list = {
-        "_type": "gradio.FileData",
-        "path": tmp_path,
-        "meta": {
-            "_type": "gradio.FileData"
-        }
-    }
+    print(f"[STEP] Sending {filename} ({ext}) to LayoutLM model for streaming...")
 
     try:
-        response = client.predict([structured_input_list],"", api_name="/process_file")
+        # EXACT MAPPING TO YOUR GRADIO API SIGNATURE
+        # Parameter 1: uploaded_files (list[filepath]) -> [handle_file(tmp_path)]
+        # Parameter 2: layoutlmv3_model_path (str) -> "98.pth"
+        job = client.submit(
+            [handle_file(tmp_path)],  # Must be a list!
+            "98.pth",                 # Model path fallback 
+            api_name="/process"
+        )
+
+        for update in job:
+            # Gradio returns a tuple based on your outputs: (pipeline_output, download_files)
+            output_text = update[0] 
+            
+            if not isinstance(output_text, str):
+                continue
+                
+            # 1. Catch the Estimation Yield
+            if "ESTIMATING PROCESSING TIME" in output_text:
+                try:
+                    # Extract the JSON payload generated by Gradio
+                    json_str = output_text.split("\n\n")[1] 
+                    est_data = json.loads(json_str)
+                    yield {"type": "estimation", "data": est_data}
+                except Exception as e:
+                    print(f"[WARN] Failed to parse estimation JSON: {e}")
+            
+            # 2. Catch the Final Result
+            else:
+                try:
+                    final_data = json.loads(output_text)
+                    # Assuming your final valid output is a list of question dictionaries
+                    if isinstance(final_data, list): 
+                        yield {"type": "final", "data": final_data}
+                except json.JSONDecodeError:
+                    # If it's not JSON, it might be the error string from Gradio
+                    if "❌ Error" in output_text or "⚠️ Pipeline failed" in output_text:
+                        raise ValueError(f"Pipeline error reported by Gradio: {output_text}")
+
     except Exception as e:
         raise ValueError(f"LayoutLM API call failed: {e}")
     finally:
+        # Clean up the temporary file on your Flask server
         try:
             os.remove(tmp_path)
         except:
             pass
-
-    # ✅ Normalize response
-    if isinstance(response, (dict, list)):
-        return response
-
-    if isinstance(response, tuple):
-        for item in response:
-            if isinstance(item, (dict, list)):
-                return item
-            if isinstance(item, str):
-                try:
-                    return json.loads(item)
-                except json.JSONDecodeError:
-                    continue
-        return {"raw_output": response}
-
-    if isinstance(response, str):
-        try:
-            return json.loads(response)
-        except json.JSONDecodeError:
-            return {"raw_output": response}
-
-    return {"raw_output": response}
-
-
 
 
 
@@ -540,19 +625,5 @@ def extract_text_from_image(image_path):
         print(f"OCR Error: {e}")
         return None
 
-
-# ==========================================
-# Example Usage (Simulating your future API)
-# ==========================================
-if __name__ == "__main__":
-    # CASE A: Using Text
-    print("\n--- TEST CASE A: TEXT INPUT ---")
-    response_text = grade_student_answer(
-        question="Which Greek epic is Ulysses based on?",
-        student_answer="It is based on Homer's Odyssey.",
-        context_text="James Joyce's novel Ulysses is a parallel to Homer's Odyssey.",
-        max_marks=5
-    )
-    print(response_text)
 
 

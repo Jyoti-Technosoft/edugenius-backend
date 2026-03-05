@@ -210,21 +210,118 @@ def send_push_notification(user_id, title, body, data=None):
 processing_tasks = {}
 
 
+# def background_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+#     """The heavy lifting happens here in a separate thread."""
+#     try:
+#         print(f"[THREAD START] Processing job: {job_id}")
+
+#         # 3. Directly call model
+#         print("[STEP] Calling LayoutLM model directly...")
+#         try:
+#             final_data = latex_model(pdf_bytes, pdf_name)
+#         except Exception as e:
+#             print("[ERROR] latex_model failed → switching to YOLO model")
+#             print("Reason:", e)
+#             final_data = call_yolo_api(pdf_bytes, pdf_name)
+
+#         # 4. Add index to MCQs
+#         indexed_mcqs = [
+#             {
+#                 **mcq,
+#                 "documentIndex": i,
+#                 "questionId": str(uuid.uuid4())
+#             }
+#             for i, mcq in enumerate(final_data)
+#         ]
+
+#         # 5. Store in vector DB
+#         print("[STEP] Storing Question Bank in vector database...")
+#         createdAtTimestamp = datetime.now().isoformat()
+
+#         # This is where your 2-minute delay happens
+#         stored_id, all_have_answers = store_mcqs(
+#             user_id, user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
+#         )
+
+#         # SAVE THE RESULT so the status endpoint can find it
+#         processing_tasks[job_id] = {
+#             "status": "completed",
+#             "generatedQAId": stored_id,
+#             "userId": user_id,
+#             "userName": user_name,
+#             "fileName": pdf_name,
+#             "createdAt": createdAtTimestamp,
+#             "answerFound": all_have_answers
+#         }
+#         print(f"[THREAD SUCCESS] Job {job_id} stored with id={stored_id}")
+
+
+#         send_push_notification(
+#             user_id=user_id,
+#             title="Processing Complete! ✅",
+#             body=f"Your file '{pdf_name}' is ready. {len(indexed_mcqs)} questions generated.",
+#             data={
+#                 "type": "upload_complete",
+#                 "jobId": job_id,
+#                 "generatedQAId": stored_id
+#             }
+#         )
+
+#     except Exception as e:
+#         print(f"[THREAD ERROR] Job {job_id} failed: {str(e)}")
+#         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+
+#         send_push_notification(
+#             user_id=user_id,
+#             title="Processing Failed ❌",
+#             body=f"We couldn't process '{pdf_name}'. Please try again.",
+#             data={
+#                 "type": "upload_failed",
+#                 "jobId": job_id,
+#                 "error": str(e)
+#             }
+#         )
+
+
+
+
 def background_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
     """The heavy lifting happens here in a separate thread."""
     try:
         print(f"[THREAD START] Processing job: {job_id}")
 
-        # 3. Directly call model
         print("[STEP] Calling LayoutLM model directly...")
+        final_data = None
+        
         try:
-            final_data = latex_model(pdf_bytes, pdf_name)
+            # 🔄 NEW: Iterate through the generator to catch estimation and final results
+            for result in latex_model(pdf_bytes, pdf_name):
+                if result["type"] == "estimation":
+                    print(f"[INFO] Estimation received for {job_id}")
+                    # Update the task status so your frontend GET endpoint can see it!
+                    processing_tasks[job_id].update({
+                        "status": "estimating",
+                        "metrics": result["data"] 
+                    })
+                    
+                elif result["type"] == "final":
+                    print(f"[INFO] Final data received for {job_id}")
+                    final_data = result["data"]
+                    
+            if not final_data:
+                raise ValueError("Generator finished but no final data was yielded.")
+                
         except Exception as e:
-            print("[ERROR] latex_model failed → switching to YOLO model")
+            print("[ERROR] latex_model failed → switching to YOLO model fallback")
             print("Reason:", e)
+            # Update frontend that we are falling back to a slower method
+            processing_tasks[job_id]["status"] = "processing_fallback" 
             final_data = call_yolo_api(pdf_bytes, pdf_name)
 
-        # 4. Add index to MCQs
+        if not final_data:
+            raise ValueError("Both LayoutLM and YOLO fallback failed to produce data.")
+
+        # 4. Add index to MCQs (Exactly as you had it)
         indexed_mcqs = [
             {
                 **mcq,
@@ -234,7 +331,7 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
             for i, mcq in enumerate(final_data)
         ]
 
-        # 5. Store in vector DB
+        # 5. Store in vector DB (Exactly as you had it)
         print("[STEP] Storing Question Bank in vector database...")
         createdAtTimestamp = datetime.now().isoformat()
 
@@ -243,7 +340,7 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
             user_id, user_name, title, description, indexed_mcqs, pdf_name, createdAtTimestamp
         )
 
-        # SAVE THE RESULT so the status endpoint can find it
+        # SAVE THE RESULT so the status endpoint can find it (Exactly as you had it)
         processing_tasks[job_id] = {
             "status": "completed",
             "generatedQAId": stored_id,
@@ -255,7 +352,7 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
         }
         print(f"[THREAD SUCCESS] Job {job_id} stored with id={stored_id}")
 
-
+        # Send push notification (Exactly as you had it)
         send_push_notification(
             user_id=user_id,
             title="Processing Complete! ✅",
@@ -269,6 +366,7 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
 
     except Exception as e:
         print(f"[THREAD ERROR] Job {job_id} failed: {str(e)}")
+        # Handle failures (Exactly as you had it)
         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
 
         send_push_notification(
@@ -282,6 +380,9 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
             }
         )
 
+
+
+        
 
 @app.route("/question-banks/upload", methods=["POST"])
 def upload_pdf():
