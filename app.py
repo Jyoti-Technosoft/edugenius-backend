@@ -2353,6 +2353,85 @@ import json
 import os
 from datetime import datetime
 
+#
+# def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+#     temp_path = f"temp_{job_id}.pdf"
+#     try:
+#         # 1. Save temp file
+#         with open(temp_path, "wb") as f:
+#             f.write(pdf_bytes)
+#
+#         # 2. Call Hugging Face API
+#         hf_client = Client("iammraat/flashcards")
+#         result = hf_client.predict(
+#             pdf_file=handle_file(temp_path),
+#             api_name="/run_pipeline"
+#         )
+#
+#         print(f"[DEBUG] Raw result from HF: {result}")
+#
+#         # --- NEW LOGIC: Extract JSON from the file path provided by HF ---
+#         actual_cards = []
+#
+#         # Result is a tuple: (Markdown_String, File_Path_to_JSON)
+#         if isinstance(result, (tuple, list)) and len(result) > 1:
+#             json_file_path = result[1]
+#
+#             if os.path.exists(json_file_path):
+#                 with open(json_file_path, 'r', encoding='utf-8') as f:
+#                     data = json.load(f)
+#
+#                     # Your HF Space output is nested: [{"metadata": {"mcqs": [...]}}]
+#                     if isinstance(data, list) and len(data) > 0:
+#                         actual_cards = data[0].get("metadata", {}).get("mcqs", [])
+#                     else:
+#                         actual_cards = []
+#
+#         # Fallback if result was already a direct list (for backward compatibility)
+#         elif isinstance(result, list):
+#             actual_cards = result
+#
+#         # 3. Store the extracted cards
+#         if not actual_cards:
+#             print("[WARNING] No cards found in HF result.")
+#             stored_id, all_found = None, 0
+#         else:
+#             # Use store_mcqs directly or your helper
+#             stored_id, all_found = store_mcqs(
+#                 userId=user_id,
+#                 userName=user_name,
+#                 title=title,
+#                 description=description,
+#                 mcqs=actual_cards,
+#                 pdf_file=pdf_name,
+#                 createdAt=datetime.now().isoformat()
+#             )
+#
+#         # 4. Update Status
+#         count = len(actual_cards)
+#         if stored_id:
+#             processing_tasks[job_id] = {
+#                 "status": "completed",
+#                 "generatedQAId": stored_id,
+#                 "message": f"Successfully extracted {count} cards.",
+#                 "totalCards": count
+#             }
+#         else:
+#             processing_tasks[job_id] = {
+#                 "status": "failed",
+#                 "error": "No cards could be extracted from the document."
+#             }
+#
+#     except Exception as e:
+#         print(f"[THREAD ERROR] {str(e)}")
+#         import traceback
+#         traceback.print_exc()
+#         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+#     finally:
+#         if os.path.exists(temp_path):
+#             os.remove(temp_path)
+
+
 
 def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
     temp_path = f"temp_{job_id}.pdf"
@@ -2370,45 +2449,34 @@ def background_flashcard_pdf_task(job_id, user_id, user_name, title, description
 
         print(f"[DEBUG] Raw result from HF: {result}")
 
-        # --- NEW LOGIC: Extract JSON from the file path provided by HF ---
+        # --- Extract JSON from the file path provided by HF ---
         actual_cards = []
-
-        # Result is a tuple: (Markdown_String, File_Path_to_JSON)
         if isinstance(result, (tuple, list)) and len(result) > 1:
             json_file_path = result[1]
-
             if os.path.exists(json_file_path):
                 with open(json_file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-
-                    # Your HF Space output is nested: [{"metadata": {"mcqs": [...]}}]
                     if isinstance(data, list) and len(data) > 0:
                         actual_cards = data[0].get("metadata", {}).get("mcqs", [])
-                    else:
-                        actual_cards = []
-
-        # Fallback if result was already a direct list (for backward compatibility)
         elif isinstance(result, list):
             actual_cards = result
 
-        # 3. Store the extracted cards
+        # 3. Store the extracted cards USING THE BRIDGE FUNCTION
         if not actual_cards:
             print("[WARNING] No cards found in HF result.")
-            stored_id, all_found = None, 0
+            stored_id, count = None, 0
         else:
-            # Use store_mcqs directly or your helper
-            stored_id, all_found = store_mcqs(
-                userId=user_id,
-                userName=user_name,
+            # THIS IS THE KEY CHANGE: Use the bridge function instead of store_mcqs directly
+            stored_id, count = process_and_store_flashcards(
+                user_id=user_id,
+                user_name=user_name,
                 title=title,
                 description=description,
-                mcqs=actual_cards,
-                pdf_file=pdf_name,
-                createdAt=datetime.now().isoformat()
+                raw_flashcards=actual_cards,
+                pdf_name=pdf_name
             )
 
         # 4. Update Status
-        count = len(actual_cards)
         if stored_id:
             processing_tasks[job_id] = {
                 "status": "completed",
