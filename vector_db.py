@@ -296,7 +296,136 @@ def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]
 
 
 
-def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
+# def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
+#     userIdClean = str(userId).strip().lower()
+#     generatedQAId = str(uuid.uuid4())
+#
+#     # --- 1. Added "public" attribute to Bank Metadata ---
+#     metadata_for_bank = {
+#         "userId": userIdClean,
+#         "userName": userName,
+#         "title": title,
+#         "generatedQAId": generatedQAId,
+#         "description": description,
+#         "file_name": pdf_file,
+#         "createdAt": createdAt,
+#         "public": is_public  # New field (Boolean)
+#
+#     }
+#
+#     bank_vector = embed(f"{title} {description}")[0]
+#
+#     question_points = []
+#     all_have_answers = True
+#     BATCH_SIZE = 256
+#
+#     for i, mcq in enumerate(mcqs):
+#         mcq = clean_mcq_text(mcq)
+#         image_fields, mcq_cleaned = get_image_data(mcq)
+#
+#         # --- Answer Processing ---
+#         # raw_answer = mcq.get("answer", "")
+#         # normalized = normalize_text(raw_answer)
+#         #
+#         # if is_invalid_answer(normalized):
+#         #     canonical_answer = ""
+#         # else:
+#         #     options = mcq.get("options", {}) or {}
+#         #     parts = split_multi_answers(normalized)
+#         #     mapped_keys = [
+#         #         map_answer_to_option(normalize_text(part), options)
+#         #         for part in parts
+#         #         if map_answer_to_option(normalize_text(part), options)
+#         #     ]
+#         #     canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
+#         # --- Answer Processing ---
+#         raw_answer = mcq.get("answer", "")
+#         normalized = normalize_text(raw_answer)
+#
+#         # NEW LOGIC: If it's a flashcard or has no options, keep the raw answer
+#         options = mcq.get("options", {}) or {}
+#
+#         if not options or len(options) == 0:
+#             # It's a flashcard: the answer is the text itself
+#             canonical_answer = raw_answer
+#         elif is_invalid_answer(normalized):
+#             canonical_answer = ""
+#         else:
+#             # It's an MCQ: map it to options (A, B, C...)
+#             parts = split_multi_answers(normalized)
+#             mapped_keys = [
+#                 map_answer_to_option(normalize_text(part), options)
+#                 for part in parts
+#                 if map_answer_to_option(normalize_text(part), options)
+#             ]
+#             canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
+#
+#         if not canonical_answer:
+#             all_have_answers = False
+#
+#         questionId = str(uuid.uuid4())
+#
+#         # --- 2. Added "difficulty" attribute to Question Payload ---
+#         q_meta = OrderedDict([
+#             ("questionId", questionId),
+#             ("generatedQAId", generatedQAId),
+#             ("userId", userIdClean),
+#             ("question", mcq.get("question", "")),
+#             ("noise", mcq.get("noise", "")),
+#             ("passage", mcq.get("passage") or ""),
+#             ("options", json.dumps(mcq.get("options", {}))),
+#             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
+#             ("question_type", mcq.get("question_type","")),
+#             ("answer", canonical_answer),
+#             # New Field: Defaults to "medium" if not provided in mcq object
+#             ("difficulty", mcq.get("difficulty", "medium")),
+#             ("documentIndex", i)
+#         ])
+#
+#         q_meta.update(image_fields)
+#
+#         pred_sub = mcq.get("predicted_subject", {})
+#         pred_con = mcq.get("predicted_concept", {})
+#
+#         q_meta["predicted_subject"] = OrderedDict([
+#             ("label", pred_sub.get("label", "")),
+#             ("confidence", pred_sub.get("confidence", 0))
+#         ])
+#
+#         q_meta["predicted_concept"] = OrderedDict([
+#             ("label", pred_con.get("label", "")),
+#             ("confidence", pred_con.get("confidence", 0))
+#         ])
+#
+#         q_vec = embed(mcq.get("question", "") or "")[0]
+#         point = models.PointStruct(
+#             id=questionId,
+#             vector=q_vec,
+#             payload=_to_payload_for_question(q_meta)
+#         )
+#         question_points.append(point)
+#
+#         if len(question_points) >= BATCH_SIZE:
+#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
+#             question_points = []
+#
+#     if question_points:
+#         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
+#
+#     metadata_for_bank["answerFound"] = all_have_answers
+#     bank_point = models.PointStruct(
+#         id=generatedQAId,
+#         vector=bank_vector,
+#         payload=_to_payload_for_bank(metadata_for_bank)
+#     )
+#     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
+#
+#     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
+#     print(f"[INFO] All answers found: {all_have_answers}")
+#     return generatedQAId, all_have_answers
+
+
+def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False):
     userIdClean = str(userId).strip().lower()
     generatedQAId = str(uuid.uuid4())
 
@@ -309,8 +438,7 @@ def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, 
         "description": description,
         "file_name": pdf_file,
         "createdAt": createdAt,
-        "public": is_public  # New field (Boolean)
-
+        "public": is_public
     }
 
     bank_vector = embed(f"{title} {description}")[0]
@@ -327,10 +455,16 @@ def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, 
         raw_answer = mcq.get("answer", "")
         normalized = normalize_text(raw_answer)
 
-        if is_invalid_answer(normalized):
+        # Logic to distinguish between Flashcards (no options) and MCQs
+        options = mcq.get("options", {}) or {}
+
+        if not options or len(options) == 0:
+            # It's a flashcard: the answer is the raw text itself
+            canonical_answer = raw_answer
+        elif is_invalid_answer(normalized):
             canonical_answer = ""
         else:
-            options = mcq.get("options", {}) or {}
+            # It's an MCQ: map it to options (A, B, C...)
             parts = split_multi_answers(normalized)
             mapped_keys = [
                 map_answer_to_option(normalize_text(part), options)
@@ -352,19 +486,23 @@ def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, 
             ("question", mcq.get("question", "")),
             ("noise", mcq.get("noise", "")),
             ("passage", mcq.get("passage") or ""),
-            ("options", json.dumps(mcq.get("options", {}))),
+            ("options", json.dumps(options)),
             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
-            ("question_type", mcq.get("question_type","")),
+            ("question_type", mcq.get("question_type", "FLASHCARD")),
             ("answer", canonical_answer),
-            # New Field: Defaults to "medium" if not provided in mcq object
             ("difficulty", mcq.get("difficulty", "medium")),
             ("documentIndex", i)
         ])
 
         q_meta.update(image_fields)
 
-        pred_sub = mcq.get("predicted_subject", {})
-        pred_con = mcq.get("predicted_concept", {})
+        # --- Null-Safety Fix for predicted fields ---
+        # Checks if fields are None (null in JSON) and replaces with empty dict
+        pred_sub = mcq.get("predicted_subject")
+        if not isinstance(pred_sub, dict): pred_sub = {}
+
+        pred_con = mcq.get("predicted_concept")
+        if not isinstance(pred_con, dict): pred_con = {}
 
         q_meta["predicted_subject"] = OrderedDict([
             ("label", pred_sub.get("label", "")),
@@ -400,7 +538,7 @@ def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, 
     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
 
     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
-    print(f"[INFO] All answers found: {all_have_answers}")
+    print(f"[INFO] Storage Complete. ID: {generatedQAId}. All answers found: {all_have_answers}")
     return generatedQAId, all_have_answers
 
 
@@ -2414,3 +2552,35 @@ def search_marketplace_banks(query_text: str, limit: int = 5):
     except Exception as e:
         print(f"[ERROR] search_marketplace_banks: {e}")
         return []
+
+
+def process_and_store_flashcards(user_id, user_name, title, description, raw_flashcards, pdf_name):
+    """
+    Bridge function to format flashcards and save them to Qdrant.
+    """
+    # 1. Format for Qdrant (Adding IDs and Indices)
+    indexed_flashcards = [
+        {
+            **card,
+            "documentIndex": i,
+            "questionId": str(uuid.uuid4()),
+            "question_type": "FLASHCARD"
+        }
+        for i, card in enumerate(raw_flashcards)
+    ]
+
+    # 2. Use existing store_mcqs logic
+    createdAt = datetime.now().isoformat()
+    stored_id, all_have_answers = store_mcqs(
+        user_id, user_name, title, description, indexed_flashcards, pdf_name, createdAt, is_public=False
+    )
+
+    # 3. Explicitly set the type to FLASHCARD in the MCQ collection
+    # (Since store_mcqs is generic, we override the 'type' here)
+    client.set_payload(
+        collection_name=COLLECTION_MCQ,
+        payload={"type": "FLASHCARD"},
+        points=[stored_id]
+    )
+
+    return stored_id, len(indexed_flashcards)

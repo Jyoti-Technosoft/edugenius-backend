@@ -85,7 +85,7 @@ from vector_db import (store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_ses
     fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, _extract_payload, add_subscription_record, \
     fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, \
     initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, \
-    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy)
+    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy, process_and_store_flashcards)
 
 
 from werkzeug.utils import secure_filename
@@ -2259,56 +2259,185 @@ def upload_flashcard_pdf():
 
 
 
+#
+# def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+#         try:
+#             print(f"[THREAD] Calling ML Space for flashcards: {pdf_name}")
+#
+#             # 1. Save temp file for Gradio (since Gradio Client needs a path)
+#             temp_path = f"temp_{job_id}.pdf"
+#             with open(temp_path, "wb") as f:
+#                 f.write(pdf_bytes)
+#
+#             # 2. Call Hugging Face API
+#             # NOTE: You'll need to confirm the api_name (likely /predict) using the script provided earlier
+#             hf_client = Client("iammraat/flashcards")
+#             result = hf_client.predict(
+#                 pdf_file=handle_file(temp_path),
+#                 api_name="/run_pipeline"
+#             )
+#
+#             # result is likely a list of flashcard dicts: [{"question": "...", "answer": "..."}]
+#             flashcards = result if isinstance(result, list) else []
+#
+#             # 3. Format for Qdrant (Adding IDs and Indices)
+#             indexed_flashcards = [
+#                 {**card, "documentIndex": i, "questionId": str(uuid.uuid4()), "question_type": "FLASHCARD"}
+#                 for i, card in enumerate(flashcards)
+#             ]
+#
+#             # 4. Store in Qdrant (Reuse your initialize and store logic)
+#             # We use record_type="FLASHCARD" to ensure it shows up in the right library
+#             createdAt = datetime.now().isoformat()
+#             stored_id, all_have_answers = store_mcqs(
+#                 user_id, user_name, title, description, indexed_flashcards, pdf_name, createdAt, is_public=False
+#             )
+#
+#             # Manually update the 'type' to FLASHCARD since store_mcqs defaults to QBANK
+#             client.set_payload(collection_name=COLLECTION_MCQ, payload={"type": "FLASHCARD"}, points=[stored_id])
+#
+#             # 5. Update Status for Flutter
+#             processing_tasks[job_id] = {
+#                 "status": "completed",
+#                 "generatedQAId": stored_id,
+#                 "message": f"Successfully extracted {len(flashcards)} cards."
+#          }
+#
+#             # Cleanup temp file
+#             if os.path.exists(temp_path): os.remove(temp_path)
+#
+#         except Exception as e:
+#             print(f"[THREAD ERROR] {str(e)}")
+#             processing_tasks[job_id] = {"status": "failed", "error": str(e)}
 
-    def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+
+
+# def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+#     temp_path = f"temp_{job_id}.pdf"
+#     try:
+#         # 1. Save temp file
+#         with open(temp_path, "wb") as f:
+#             f.write(pdf_bytes)
+#
+#         # 2. Call Hugging Face API
+#         hf_client = Client("iammraat/flashcards")
+#         result = hf_client.predict(
+#             pdf_file=handle_file(temp_path),
+#             api_name="/run_pipeline"
+#         )
+#
+#         print(f"[DEBUG] Raw result from HF: {result}")
+#
+#         # 3. Use the helper function from vector_db.py
+#         raw_cards = result if isinstance(result, list) else []
+#         stored_id, count = process_and_store_flashcards(
+#             user_id, user_name, title, description, raw_cards, pdf_name
+#         )
+#
+#         # 4. Update Status
+#         processing_tasks[job_id] = {
+#             "status": "completed",
+#             "generatedQAId": stored_id,
+#             "message": f"Successfully extracted {count} cards."
+#         }
+#
+#     except Exception as e:
+#         print(f"[THREAD ERROR] {str(e)}")
+#         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+#     finally:
+#         if os.path.exists(temp_path):
+#             os.remove(temp_path)
+
+
+import json
+import os
+from datetime import datetime
+
+
+def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
+    temp_path = f"temp_{job_id}.pdf"
     try:
-        print(f"[THREAD] Calling ML Space for flashcards: {pdf_name}")
-        
-        # 1. Save temp file for Gradio (since Gradio Client needs a path)
-        temp_path = f"temp_{job_id}.pdf"
+        # 1. Save temp file
         with open(temp_path, "wb") as f:
             f.write(pdf_bytes)
 
         # 2. Call Hugging Face API
-        # NOTE: You'll need to confirm the api_name (likely /predict) using the script provided earlier
         hf_client = Client("iammraat/flashcards")
         result = hf_client.predict(
             pdf_file=handle_file(temp_path),
             api_name="/run_pipeline"
         )
 
-        # result is likely a list of flashcard dicts: [{"question": "...", "answer": "..."}]
-        flashcards = result if isinstance(result, list) else []
+        print(f"[DEBUG] Raw result from HF: {result}")
 
-        # 3. Format for Qdrant (Adding IDs and Indices)
-        indexed_flashcards = [
-            {**card, "documentIndex": i, "questionId": str(uuid.uuid4()), "question_type": "FLASHCARD"}
-            for i, card in enumerate(flashcards)
-        ]
+        # --- NEW LOGIC: Extract JSON from the file path provided by HF ---
+        actual_cards = []
 
-        # 4. Store in Qdrant (Reuse your initialize and store logic)
-        # We use record_type="FLASHCARD" to ensure it shows up in the right library
-        createdAt = datetime.now().isoformat()
-        stored_id, all_have_answers = store_mcqs(
-            user_id, user_name, title, description, indexed_flashcards, pdf_name, createdAt, is_public=False
-        )
-        
-        # Manually update the 'type' to FLASHCARD since store_mcqs defaults to QBANK
-        client.set_payload(collection_name=COLLECTION_MCQ, payload={"type": "FLASHCARD"}, points=[stored_id])
+        # Result is a tuple: (Markdown_String, File_Path_to_JSON)
+        if isinstance(result, (tuple, list)) and len(result) > 1:
+            json_file_path = result[1]
 
-        # 5. Update Status for Flutter
-        processing_tasks[job_id] = {
-            "status": "completed",
-            "generatedQAId": stored_id,
-            "message": f"Successfully extracted {len(flashcards)} cards."
-        }
-        
-        # Cleanup temp file
-        if os.path.exists(temp_path): os.remove(temp_path)
+            if os.path.exists(json_file_path):
+                with open(json_file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                    # Your HF Space output is nested: [{"metadata": {"mcqs": [...]}}]
+                    if isinstance(data, list) and len(data) > 0:
+                        actual_cards = data[0].get("metadata", {}).get("mcqs", [])
+                    else:
+                        actual_cards = []
+
+        # Fallback if result was already a direct list (for backward compatibility)
+        elif isinstance(result, list):
+            actual_cards = result
+
+        # 3. Store the extracted cards
+        if not actual_cards:
+            print("[WARNING] No cards found in HF result.")
+            stored_id, all_found = None, 0
+        else:
+            # Use store_mcqs directly or your helper
+            stored_id, all_found = store_mcqs(
+                userId=user_id,
+                userName=user_name,
+                title=title,
+                description=description,
+                mcqs=actual_cards,
+                pdf_file=pdf_name,
+                createdAt=datetime.now().isoformat()
+            )
+
+        # 4. Update Status
+        count = len(actual_cards)
+        if stored_id:
+            processing_tasks[job_id] = {
+                "status": "completed",
+                "generatedQAId": stored_id,
+                "message": f"Successfully extracted {count} cards.",
+                "totalCards": count
+            }
+        else:
+            processing_tasks[job_id] = {
+                "status": "failed",
+                "error": "No cards could be extracted from the document."
+            }
 
     except Exception as e:
         print(f"[THREAD ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
         processing_tasks[job_id] = {"status": "failed", "error": str(e)}
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.route("/flashcards/status/<job_id>", methods=["GET"])
+def get_flashcard_status(job_id):
+    # This looks up the status in your global processing_tasks dict
+    status = processing_tasks.get(job_id)
+    if not status:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(status), 200
 
 
 
