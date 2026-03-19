@@ -432,18 +432,39 @@ def background_image_task(job_id, user_id, user_name, title, description, image_
         all_results = []
 
         # 2. Loop through each image (data already in memory as bytes)
+        # for idx, (file_bytes, filename) in enumerate(image_data_list, start=1):
+        #     print(f"[STEP] Processing image {idx}/{len(image_data_list)}: {filename}")
+        #
+        #     try:
+        #         # Call your AI model
+        #         result = latex_model(file_bytes, filename)
+        #         print(f"[SUCCESS] Model returned result for {filename}")
+        #
+        #         if isinstance(result, list):
+        #             all_results.extend(result)
+        #         else:
+        #             all_results.append(result)
+        #     except Exception as e:
+        #         print(f"[ERROR] Failed on {filename}: {e}")
         for idx, (file_bytes, filename) in enumerate(image_data_list, start=1):
             print(f"[STEP] Processing image {idx}/{len(image_data_list)}: {filename}")
 
             try:
-                # Call your AI model
-                result = latex_model(file_bytes, filename)
-                print(f"[SUCCESS] Model returned result for {filename}")
+                final_data = None
+                for result in latex_model(file_bytes, filename):
+                    if result["type"] == "estimation":
+                        print(f"[INFO] Estimation received for {filename}")
+                    elif result["type"] == "final":
+                        final_data = result["data"]
 
-                if isinstance(result, list):
-                    all_results.extend(result)
+                if final_data is None:
+                    raise ValueError("No final data yielded for image")
+
+                if isinstance(final_data, list):
+                    all_results.extend(final_data)
                 else:
-                    all_results.append(result)
+                    all_results.append(final_data)
+
             except Exception as e:
                 print(f"[ERROR] Failed on {filename}: {e}")
 
