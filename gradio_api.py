@@ -6,9 +6,10 @@
 import os,tempfile
 import json
 from typing import Dict, Any, Tuple
-from gradio_client import Client
+from gradio_client import Client, handle_file
 from drive_uploader import load_env
 import time
+
 
 
 
@@ -305,7 +306,7 @@ def call_yolo_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
 
 import json
 import os
-import tempfile
+
 from typing import Dict, Any, Generator
 from gradio_client import Client, handle_file
 
@@ -484,7 +485,6 @@ def call_feeedback_api(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 print(f"[WARN] Failed to delete temporary file {tmp_path}: {e}")
 
 
-from gradio_client import Client
 
 
 def get_grading_report(kb_text, question_text, answer_text):
@@ -506,8 +506,7 @@ def get_grading_report(kb_text, question_text, answer_text):
         return {"status": "error", "message": str(e)}
 
 
-from gradio_client import Client, handle_file
-import os
+
 
 
 def grade_student_answer(question: str, student_answer: str, context_text: str = None, file_path: str = None,
@@ -626,7 +625,7 @@ def grade_student_answer(question: str, student_answer: str, context_text: str =
 #         return None
 
 
-from gradio_client import Client, handle_file
+
 
 def extract_text_from_image(image_path):
     """
