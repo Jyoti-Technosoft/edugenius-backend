@@ -593,7 +593,40 @@ def grade_student_answer(question: str, student_answer: str, context_text: str =
 
 
 
+#
+#
+# def extract_text_from_image(image_path):
+#     """
+#     Sends an image to the 'iammraat/laststraw' Space and returns the extracted text.
+#
+#     Args:
+#         image_path (str): The local file path to the image.
+#
+#     Returns:
+#         str: The extracted text, or None if an error occurs.
+#
+#     """
+#
+#     ocr_client = Client("iammraat/laststraw")
+#
+#     try:
+#         # The API returns a tuple: (result_image_path, result_text)
+#         result = ocr_client.predict(
+#             image=handle_file(image_path),
+#             api_name="/run_pipeline"
+#         )
+#
+#         # We only want the text (the second item in the tuple)
+#         extracted_text = result[1]
+#
+#         return extracted_text
+#
+#     except Exception as e:
+#         print(f"OCR Error: {e}")
+#         return None
 
+
+from gradio_client import Client, handle_file
 
 def extract_text_from_image(image_path):
     """
@@ -604,20 +637,21 @@ def extract_text_from_image(image_path):
 
     Returns:
         str: The extracted text, or None if an error occurs.
-
     """
-
+    # Pro-tip: Move this outside the function if you are calling it in a loop
+    # so you don't re-initialize the client for every single image.
     ocr_client = Client("iammraat/laststraw")
 
     try:
-        # The API returns a tuple: (result_image_path, result_text)
+        # The API returns a tuple of 4 items:
+        # (0: deskewed_img, 1: yolo_img, 2: merged_img, 3: result_text)
         result = ocr_client.predict(
             image=handle_file(image_path),
             api_name="/run_pipeline"
         )
 
-        # We only want the text (the second item in the tuple)
-        extracted_text = result[1]
+        # We want the text, which is the 4th item (index 3)
+        extracted_text = result[3]
 
         return extracted_text
 
