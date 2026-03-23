@@ -91,7 +91,6 @@ from vector_db import (store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_ses
 from werkzeug.utils import secure_filename
 
 from flask import Flask, request, jsonify, Response
-from datetime import datetime
 from werkzeug.utils import secure_filename
 
 import threading
@@ -432,20 +431,7 @@ def background_image_task(job_id, user_id, user_name, title, description, image_
         all_results = []
 
         # 2. Loop through each image (data already in memory as bytes)
-        # for idx, (file_bytes, filename) in enumerate(image_data_list, start=1):
-        #     print(f"[STEP] Processing image {idx}/{len(image_data_list)}: {filename}")
-        #
-        #     try:
-        #         # Call your AI model
-        #         result = latex_model(file_bytes, filename)
-        #         print(f"[SUCCESS] Model returned result for {filename}")
-        #
-        #         if isinstance(result, list):
-        #             all_results.extend(result)
-        #         else:
-        #             all_results.append(result)
-        #     except Exception as e:
-        #         print(f"[ERROR] Failed on {filename}: {e}")
+
         for idx, (file_bytes, filename) in enumerate(image_data_list, start=1):
             print(f"[STEP] Processing image {idx}/{len(image_data_list)}: {filename}")
 
@@ -1685,9 +1671,6 @@ def get_marketplace():
 
 
 
-
-
-
 @app.route("/user/update-username", methods=["POST"])
 def api_update_username():
     data = request.json
@@ -2209,12 +2192,6 @@ def upload_flashcard_pdf():
 
 
 
-import json
-import os
-from datetime import datetime
-
-
-
 
 def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
     temp_path = f"temp_{job_id}.pdf"
@@ -2258,20 +2235,6 @@ def background_flashcard_pdf_task(job_id, user_id, user_name, title, description
                 raw_flashcards=actual_cards,
                 pdf_name=pdf_name
             )
-
-        # # 4. Update Status
-        # if stored_id:
-        #     processing_tasks[job_id] = {
-        #         "status": "completed",
-        #         "generatedQAId": stored_id,
-        #         "message": f"Successfully extracted {count} cards.",
-        #         "totalCards": count
-        #     }
-        # else:
-        #     processing_tasks[job_id] = {
-        #         "status": "failed",
-        #         "error": "No cards could be extracted from the document."
-        #     }
 
         # After the "if stored_id:" block, replace the status update with:
         if stored_id:
