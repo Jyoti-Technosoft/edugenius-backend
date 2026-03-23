@@ -295,136 +295,6 @@ def get_image_data(mcq: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, Any]]
 
 
 
-
-# def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False): # Added is_public param
-#     userIdClean = str(userId).strip().lower()
-#     generatedQAId = str(uuid.uuid4())
-#
-#     # --- 1. Added "public" attribute to Bank Metadata ---
-#     metadata_for_bank = {
-#         "userId": userIdClean,
-#         "userName": userName,
-#         "title": title,
-#         "generatedQAId": generatedQAId,
-#         "description": description,
-#         "file_name": pdf_file,
-#         "createdAt": createdAt,
-#         "public": is_public  # New field (Boolean)
-#
-#     }
-#
-#     bank_vector = embed(f"{title} {description}")[0]
-#
-#     question_points = []
-#     all_have_answers = True
-#     BATCH_SIZE = 256
-#
-#     for i, mcq in enumerate(mcqs):
-#         mcq = clean_mcq_text(mcq)
-#         image_fields, mcq_cleaned = get_image_data(mcq)
-#
-#         # --- Answer Processing ---
-#         # raw_answer = mcq.get("answer", "")
-#         # normalized = normalize_text(raw_answer)
-#         #
-#         # if is_invalid_answer(normalized):
-#         #     canonical_answer = ""
-#         # else:
-#         #     options = mcq.get("options", {}) or {}
-#         #     parts = split_multi_answers(normalized)
-#         #     mapped_keys = [
-#         #         map_answer_to_option(normalize_text(part), options)
-#         #         for part in parts
-#         #         if map_answer_to_option(normalize_text(part), options)
-#         #     ]
-#         #     canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
-#         # --- Answer Processing ---
-#         raw_answer = mcq.get("answer", "")
-#         normalized = normalize_text(raw_answer)
-#
-#         # NEW LOGIC: If it's a flashcard or has no options, keep the raw answer
-#         options = mcq.get("options", {}) or {}
-#
-#         if not options or len(options) == 0:
-#             # It's a flashcard: the answer is the text itself
-#             canonical_answer = raw_answer
-#         elif is_invalid_answer(normalized):
-#             canonical_answer = ""
-#         else:
-#             # It's an MCQ: map it to options (A, B, C...)
-#             parts = split_multi_answers(normalized)
-#             mapped_keys = [
-#                 map_answer_to_option(normalize_text(part), options)
-#                 for part in parts
-#                 if map_answer_to_option(normalize_text(part), options)
-#             ]
-#             canonical_answer = ",".join(mapped_keys) if mapped_keys else ""
-#
-#         if not canonical_answer:
-#             all_have_answers = False
-#
-#         questionId = str(uuid.uuid4())
-#
-#         # --- 2. Added "difficulty" attribute to Question Payload ---
-#         q_meta = OrderedDict([
-#             ("questionId", questionId),
-#             ("generatedQAId", generatedQAId),
-#             ("userId", userIdClean),
-#             ("question", mcq.get("question", "")),
-#             ("noise", mcq.get("noise", "")),
-#             ("passage", mcq.get("passage") or ""),
-#             ("options", json.dumps(mcq.get("options", {}))),
-#             ("knowledge_base", str(mcq.get("knowledge_base", ""))),
-#             ("question_type", mcq.get("question_type","")),
-#             ("answer", canonical_answer),
-#             # New Field: Defaults to "medium" if not provided in mcq object
-#             ("difficulty", mcq.get("difficulty", "medium")),
-#             ("documentIndex", i)
-#         ])
-#
-#         q_meta.update(image_fields)
-#
-#         pred_sub = mcq.get("predicted_subject", {})
-#         pred_con = mcq.get("predicted_concept", {})
-#
-#         q_meta["predicted_subject"] = OrderedDict([
-#             ("label", pred_sub.get("label", "")),
-#             ("confidence", pred_sub.get("confidence", 0))
-#         ])
-#
-#         q_meta["predicted_concept"] = OrderedDict([
-#             ("label", pred_con.get("label", "")),
-#             ("confidence", pred_con.get("confidence", 0))
-#         ])
-#
-#         q_vec = embed(mcq.get("question", "") or "")[0]
-#         point = models.PointStruct(
-#             id=questionId,
-#             vector=q_vec,
-#             payload=_to_payload_for_question(q_meta)
-#         )
-#         question_points.append(point)
-#
-#         if len(question_points) >= BATCH_SIZE:
-#             client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#             question_points = []
-#
-#     if question_points:
-#         client.upsert(collection_name=COLLECTION_QUESTIONS, points=question_points)
-#
-#     metadata_for_bank["answerFound"] = all_have_answers
-#     bank_point = models.PointStruct(
-#         id=generatedQAId,
-#         vector=bank_vector,
-#         payload=_to_payload_for_bank(metadata_for_bank)
-#     )
-#     client.upsert(collection_name=COLLECTION_MCQ, points=[bank_point])
-#
-#     update_answer_flag_in_qdrant(generatedQAId, all_have_answers)
-#     print(f"[INFO] All answers found: {all_have_answers}")
-#     return generatedQAId, all_have_answers
-
-
 def store_mcqs(userId, userName, title, description, mcqs, pdf_file, createdAt, is_public=False):
     userIdClean = str(userId).strip().lower()
     generatedQAId = str(uuid.uuid4())
@@ -837,7 +707,9 @@ def fetch_question_banks_metadata(userId: str):
 
 from collections import Counter
 
-def compute_subject_tags_for_bank(generatedQAId, top_k=2):
+
+
+def compute_subject_tags_for_bank(generatedQAId, top_k=3):
     subject_counter = Counter()
     next_offset = None
 
@@ -879,8 +751,6 @@ def compute_subject_tags_for_bank(generatedQAId, top_k=2):
 
 
 
-
-
 def store_test_session(userId, testId, testTitle, totalTime, createdAt, mcqs_data):
     try:
         userIdClean = str(userId).strip().lower()
@@ -892,6 +762,9 @@ def store_test_session(userId, testId, testTitle, totalTime, createdAt, mcqs_dat
     except Exception as e:
         print("store_test_session error:", e)
         return False
+
+
+
 
 def _extract_payload(point):
     """Safely extract payload from a qdrant point that may be either an object or a dict."""
@@ -906,6 +779,9 @@ def _extract_payload(point):
         return point.get("payload", {}) or {}
     return {}
 
+
+
+
 def _extract_id(point):
     """Safely extract id from qdrant point (object or dict)."""
     if not point:
@@ -916,6 +792,8 @@ def _extract_id(point):
     if isinstance(point, dict):
         return point.get("id")
     return None
+
+
 
 def _normalize_scroll_result(res):
     """
@@ -943,7 +821,11 @@ def _ensure_json_field(payload, key):
             payload[key] = payload[key]
     return payload
 
-# ---------- Functions (rewritten) ----------
+######################################################################################################
+#=================TEST CREATION=======================================================================
+
+
+
 
 def fetch_test_by_testId(testId):
     try:
@@ -965,6 +847,9 @@ def fetch_test_by_testId(testId):
     except Exception as e:
         print("fetch_test_by_testId error:", e)
         return None
+
+
+
 
 
 def test_sessions_by_userId(userId):
@@ -1172,6 +1057,9 @@ def fetch_submitted_test_by_testId(testId):
         return None
 
 
+#==============================================================================
+#EDITING
+#==============================================================================
 
 def delete_single_question(questionId):
     try:
@@ -1289,6 +1177,9 @@ def add_single_question(generatedQAId, question_data):
         return False
 
 
+
+#Handwritten Questions
+
 def store_mcqs_for_manual_creation(user_id, user_name, title, description, mcqs, linked_source_id=None):
     """
     Stores manually created MCQs into Qdrant with specific metadata.
@@ -1318,12 +1209,6 @@ def store_mcqs_for_manual_creation(user_id, user_name, title, description, mcqs,
     BATCH_SIZE = 256
 
     for i, mcq in enumerate(mcqs):
-        # Even for manual entry, cleaning ensures consistency
-        # Assuming clean_mcq_text and get_image_data are available in your scope
-        # If not, you can skip cleaning for manual entry, but keeping structure is key.
-
-        # cleaned_mcq = clean_mcq_text(mcq)
-        # image_fields, _ = get_image_data(cleaned_mcq)
 
         # For manual entry, we might not have 'image_fields', so we default:
         image_fields = {"has_image": False, "image_path": None}
@@ -1626,6 +1511,10 @@ def fetch_question_context(questionId: str):
 
 
 
+#=====================================================================================
+#Community Qbanks
+#=====================================================================================
+
 
 COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
 
@@ -1701,7 +1590,6 @@ def fetch_subscribed_questions(userId):
     return [q.payload for q in questions]
 
 
-# vector_db.py
 
 def fetch_public_marketplace():
     """Fetches all curated banks with question counts."""
@@ -1888,6 +1776,109 @@ def fetch_community_marketplace(limit=20):
         })
 
     return results
+
+
+
+
+def fetch_user_public_banks(userId):
+    """
+    Fetches only the question banks for a specific user that are marked as public.
+    Useful for viewing a user's public profile.
+    """
+    userIdClean = str(userId).strip().lower()
+
+    # Filter: Must match User ID AND Must be Public
+    search_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+            models.FieldCondition(key="public", match=models.MatchValue(value=True))
+        ]
+    )
+
+    # Scroll through the MCQ collection
+    banks, _ = client.scroll(
+        collection_name=COLLECTION_MCQ,
+        scroll_filter=search_filter,
+        limit=100,  # Adjust limit as needed
+        with_payload=True
+    )
+
+    results = []
+    for b in banks:
+        gen_id = b.payload.get("generatedQAId")
+
+        # Optional: Get the real-time question count for the UI
+        # If performance is slow, you can remove this count query
+        count = client.count(
+            collection_name=COLLECTION_QUESTIONS,
+            count_filter=models.Filter(
+                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+            )
+        ).count
+
+        results.append({
+            "generatedQAId": gen_id,
+            "title": b.payload.get("title", "Untitled"),
+            "description": b.payload.get("description", ""),
+            "userName": b.payload.get("userName", ""),
+            "createdAt": b.payload.get("createdAt"),
+            "totalQuestions": count,
+            "isPublic": True,
+            "userId": userIdClean,
+            "linkedSourceId": b.payload.get("linkedSourceId")
+        })
+
+    return results
+
+
+def search_marketplace_banks(query_text: str, limit: int = 5):
+    """
+    Performs a semantic search on Public Question Banks using FastEmbed.
+    """
+    try:
+        # 1. Convert text query to vector
+        # Your 'embed' function already handles FastEmbed logic and returns a list of lists.
+        # We take [0] because we are embedding a single query string.
+        query_vector = embed(query_text)[0]
+
+        # 2. Filter: Only search banks that are PUBLIC
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="public", match=models.MatchValue(value=True))
+            ]
+        )
+
+        # 3. Perform Vector Search
+        hits = client.search(
+            collection_name=COLLECTION_MCQ,
+            query_vector=query_vector,
+            query_filter=search_filter,
+            limit=limit,
+            with_payload=True
+        )
+
+        results = []
+        for hit in hits:
+            payload = hit.payload
+
+            # Optional: You can skip the 'totalQuestions' count here for speed,
+            # or include it if your UI needs it immediately.
+            results.append({
+                "generatedQAId": payload.get("generatedQAId"),
+                "title": payload.get("title", "Untitled"),
+                "description": payload.get("description", ""),
+                "userName": payload.get("userName", "Unknown"),
+                "isDownloaded": False,  # Search results are generic
+                "linkedSourceId": payload.get("linkedSourceId"),
+                "score": hit.score  # Return score for relevance debugging
+            })
+
+        return results
+
+    except Exception as e:
+        print(f"[ERROR] search_marketplace_banks: {e}")
+        return []
+
 
 
 
@@ -2454,104 +2445,7 @@ def get_user_fcm_token(user_id):
         return None
 
 
-def fetch_user_public_banks(userId):
-    """
-    Fetches only the question banks for a specific user that are marked as public.
-    Useful for viewing a user's public profile.
-    """
-    userIdClean = str(userId).strip().lower()
 
-    # Filter: Must match User ID AND Must be Public
-    search_filter = models.Filter(
-        must=[
-            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
-            models.FieldCondition(key="public", match=models.MatchValue(value=True))
-        ]
-    )
-
-    # Scroll through the MCQ collection
-    banks, _ = client.scroll(
-        collection_name=COLLECTION_MCQ,
-        scroll_filter=search_filter,
-        limit=100,  # Adjust limit as needed
-        with_payload=True
-    )
-
-    results = []
-    for b in banks:
-        gen_id = b.payload.get("generatedQAId")
-
-        # Optional: Get the real-time question count for the UI
-        # If performance is slow, you can remove this count query
-        count = client.count(
-            collection_name=COLLECTION_QUESTIONS,
-            count_filter=models.Filter(
-                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
-            )
-        ).count
-
-        results.append({
-            "generatedQAId": gen_id,
-            "title": b.payload.get("title", "Untitled"),
-            "description": b.payload.get("description", ""),
-            "userName": b.payload.get("userName", ""),
-            "createdAt": b.payload.get("createdAt"),
-            "totalQuestions": count,
-            "isPublic": True,
-            "userId": userIdClean,
-            "linkedSourceId": b.payload.get("linkedSourceId")
-        })
-
-    return results
-
-
-def search_marketplace_banks(query_text: str, limit: int = 5):
-    """
-    Performs a semantic search on Public Question Banks using FastEmbed.
-    """
-    try:
-        # 1. Convert text query to vector
-        # Your 'embed' function already handles FastEmbed logic and returns a list of lists.
-        # We take [0] because we are embedding a single query string.
-        query_vector = embed(query_text)[0]
-
-        # 2. Filter: Only search banks that are PUBLIC
-        search_filter = models.Filter(
-            must=[
-                models.FieldCondition(key="public", match=models.MatchValue(value=True))
-            ]
-        )
-
-        # 3. Perform Vector Search
-        hits = client.search(
-            collection_name=COLLECTION_MCQ,
-            query_vector=query_vector,
-            query_filter=search_filter,
-            limit=limit,
-            with_payload=True
-        )
-
-        results = []
-        for hit in hits:
-            payload = hit.payload
-
-            # Optional: You can skip the 'totalQuestions' count here for speed,
-            # or include it if your UI needs it immediately.
-            results.append({
-                "generatedQAId": payload.get("generatedQAId"),
-                "title": payload.get("title", "Untitled"),
-                "description": payload.get("description", ""),
-                "userName": payload.get("userName", "Unknown"),
-                "isDownloaded": False,  # Search results are generic
-                "linkedSourceId": payload.get("linkedSourceId"),
-                "score": hit.score  # Return score for relevance debugging
-            })
-
-        return results
-
-    except Exception as e:
-        print(f"[ERROR] search_marketplace_banks: {e}")
-        return []
 
 
 def process_and_store_flashcards(user_id, user_name, title, description, raw_flashcards, pdf_name):
