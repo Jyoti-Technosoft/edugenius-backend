@@ -627,6 +627,85 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
 
 
 
+# def fetch_question_banks_metadata(userId: str):
+#     """
+#     Fetches a unified list of QBanks for the user's dashboard:
+#     1. QBanks they created (Owners).
+#     2. QBanks they subscribed to (Downloads).
+#     3. EXCLUDES Flashcards explicitly.
+#     """
+#     userIdClean = str(userId).strip().lower()
+#
+#     # --- Step 1: Get all Subscribed Bank IDs ---
+#     try:
+#         sub_hits = client.scroll(
+#             collection_name=COLLECTION_SUBSCRIPTIONS,
+#             scroll_filter=models.Filter(
+#                 must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+#             ),
+#             limit=1000,
+#             with_payload=True
+#         )[0]
+#         subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+#     except Exception:
+#         subscribed_ids = []
+#
+#     # --- Step 2: Query MCQ Collection ---
+#     merged_filter = models.Filter(
+#         should=[
+#             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
+#             models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
+#         ],
+#         must_not=[
+#             models.FieldCondition(key="type", match=models.MatchValue(value="FLASHCARD"))
+#         ]
+#     )
+#
+#     banks, _ = client.scroll(
+#         collection_name=COLLECTION_MCQ,
+#         scroll_filter=merged_filter,
+#         limit=500,
+#         with_payload=True
+#     )
+#
+#     results = []
+#     for bank in banks:
+#         payload = bank.payload or {}
+#         gen_id = payload.get("generatedQAId")
+#
+#         # Determine Permissions
+#         is_owner = payload.get("userId") == userIdClean
+#
+#         # Fresh Count from Questions Collection
+#         count = client.count(
+#             collection_name=COLLECTION_QUESTIONS,
+#             count_filter=models.Filter(
+#                 must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
+#             )
+#         ).count
+#
+#         # Get top subject tags
+#         tags = compute_subject_tags_for_bank(gen_id)
+#
+#         results.append({
+#             "generatedQAId": gen_id,
+#             "title": payload.get("title", ""),
+#             "userName": payload.get("userName", ""),
+#             "description": payload.get("description", ""),
+#             "createdAt": payload.get("createdAt"),
+#             "totalQuestions": count,
+#             "tags": tags,
+#             "isPublic": payload.get("public", False),
+#             "canEdit": is_owner,
+#             "isDownloaded": gen_id in subscribed_ids,
+#
+#             # --- 🔥 ADD THIS LINE 🔥 ---
+#             "linkedSourceId": payload.get("linkedSourceId")
+#         })
+#
+#     return results
+
+
 def fetch_question_banks_metadata(userId: str):
     """
     Fetches a unified list of QBanks for the user's dashboard:
@@ -636,7 +715,7 @@ def fetch_question_banks_metadata(userId: str):
     """
     userIdClean = str(userId).strip().lower()
 
-    # --- Step 1: Get all Subscribed Bank IDs ---
+    # --- Step 1: Get all Subscribed Bank IDs AND their download timestamps ---
     try:
         sub_hits = client.scroll(
             collection_name=COLLECTION_SUBSCRIPTIONS,
@@ -646,8 +725,20 @@ def fetch_question_banks_metadata(userId: str):
             limit=1000,
             with_payload=True
         )[0]
-        subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
+
+        # Create a dictionary mapping the Bank ID to the exact time it was downloaded
+        subscribed_map = {}
+        for h in sub_hits:
+            if h.payload:
+                q_id = h.payload.get("generatedQAId")
+                # Fallback to downloadedAt just in case older records use it
+                sub_time = h.payload.get("subscribedAt") or h.payload.get("downloadedAt")
+                if q_id and sub_time:
+                    subscribed_map[q_id] = sub_time
+
+        subscribed_ids = list(subscribed_map.keys())
     except Exception:
+        subscribed_map = {}
         subscribed_ids = []
 
     # --- Step 2: Query MCQ Collection ---
@@ -675,6 +766,11 @@ def fetch_question_banks_metadata(userId: str):
 
         # Determine Permissions
         is_owner = payload.get("userId") == userIdClean
+        is_downloaded = gen_id in subscribed_ids
+
+        # --- THE MAGIC TRICK ---
+        # If it's downloaded, use the subscription time. Otherwise, use original creation time.
+        display_time = subscribed_map.get(gen_id) if is_downloaded else payload.get("createdAt")
 
         # Fresh Count from Questions Collection
         count = client.count(
@@ -692,14 +788,12 @@ def fetch_question_banks_metadata(userId: str):
             "title": payload.get("title", ""),
             "userName": payload.get("userName", ""),
             "description": payload.get("description", ""),
-            "createdAt": payload.get("createdAt"),
+            "createdAt": display_time,  # <--- Now showing the user-specific time!
             "totalQuestions": count,
             "tags": tags,
             "isPublic": payload.get("public", False),
             "canEdit": is_owner,
-            "isDownloaded": gen_id in subscribed_ids,
-
-            # --- 🔥 ADD THIS LINE 🔥 ---
+            "isDownloaded": is_downloaded,
             "linkedSourceId": payload.get("linkedSourceId")
         })
 
@@ -2478,3 +2572,39 @@ def process_and_store_flashcards(user_id, user_name, title, description, raw_fla
     )
 
     return stored_id, len(indexed_flashcards)
+
+
+def delete_subscription_record(userId, generatedQAId):
+    """
+    Removes a user's subscription to a specific question bank.
+    Uses a filter to guarantee deletion based on the cleaned payload data.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+
+        # Build a filter that strictly matches BOTH the user ID and the Bank ID
+        delete_filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="userId",
+                    match=models.MatchValue(value=userIdClean)
+                ),
+                models.FieldCondition(
+                    key="generatedQAId",
+                    match=models.MatchValue(value=generatedQAId)
+                )
+            ]
+        )
+
+        # Tell Qdrant to delete any points matching this filter in the subscriptions collection
+        client.delete(
+            collection_name=COLLECTION_SUBSCRIPTIONS,
+            points_selector=models.FilterSelector(filter=delete_filter)
+        )
+
+        print(f"[INFO] Successfully removed subscription for user {userIdClean} -> bank {generatedQAId}")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] delete_subscription_record error: {e}")
+        return False

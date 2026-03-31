@@ -42,7 +42,7 @@ from flask_cors import CORS
 from qdrant_client import QdrantClient, models
 import os
 import random
-from gradio_api import call_yolo_api,latex_model, call_feeedback_api, get_grading_report, grade_student_answer, extract_text_from_image
+from gradio_api import latex_model, call_feeedback_api, get_grading_report, grade_student_answer, extract_text_from_image
 
 
 
@@ -2089,13 +2089,7 @@ def search_marketplace_api():
 
 
 
-
-
-
-
 from gradio_client import Client, handle_file
-
-
 
 
 
@@ -2192,7 +2186,6 @@ def upload_flashcard_pdf():
 
 
 
-
 def background_flashcard_pdf_task(job_id, user_id, user_name, title, description, pdf_bytes, pdf_name):
     temp_path = f"temp_{job_id}.pdf"
     try:
@@ -2283,6 +2276,40 @@ def get_flashcard_status(job_id):
         return jsonify({"error": "Job not found"}), 404
     return jsonify(status), 200
 
+
+@app.route("/user/subscriptions/remove", methods=["DELETE"])
+def remove_subscription_api():
+    """
+    API to remove a subscription/downloaded bank from a user's library.
+    Expects JSON: { "userId": "...", "generatedQAId": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    user_id = data.get("userId")
+    qbank_id = data.get("generatedQAId")
+
+    if not user_id or not qbank_id:
+        return jsonify({"error": "userId and generatedQAId are required"}), 400
+
+    try:
+        # We will define this function in vector_db.py next
+        from vector_db import delete_subscription_record
+
+        success = delete_subscription_record(user_id, qbank_id)
+
+        if success:
+            return jsonify({
+                "message": "Subscription removed successfully",
+                "userId": user_id,
+                "generatedQAId": qbank_id
+            }), 200
+        else:
+            return jsonify({
+                "error": "Subscription not found or already removed."
+            }), 404
+
+    except Exception as e:
+        print(f"[ERROR] remove_subscription_api: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
