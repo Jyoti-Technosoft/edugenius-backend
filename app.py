@@ -85,7 +85,7 @@ from vector_db import (store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_ses
     fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, _extract_payload, add_subscription_record, \
     fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, \
     initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, \
-    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy, process_and_store_flashcards)
+    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy, process_and_store_flashcards, check_and_increment_generation, get_user_status)
 
 
 from werkzeug.utils import secure_filename
@@ -327,6 +327,17 @@ def upload_pdf():
     if not all([user_id, title, description]):
         return jsonify({"error": "userId, title, description are required"}), 400
 
+    # 🛑 👇 INSERT THE GENERATION GATE HERE 👇 🛑
+    is_allowed, remaining = check_and_increment_generation(user_id)
+    if not is_allowed:
+        print(f"[REJECT] User {user_id} blocked. Lifetime free generation limit reached.")
+        return jsonify({
+            "status": "limit_reached",
+            "error": "Upgrade Required",
+            "message": "You have used all 5 lifetime free PDF extractions. Please upgrade to Praksis Pro for unlimited access."
+        }), 403  # HTTP 403 Forbidden lets your Flutter app know to pop up the paywall overlay
+        # 🛑 👆 END OF GENERATION GATE 👆 🛑
+
     # 2. Prepare data for the thread
     pdf_bytes = pdf_file.read()
     pdf_name = secure_filename(pdf_file.filename)
@@ -523,6 +534,17 @@ def upload_image():
 
     if not all([user_id, title, description]):
         return jsonify({"error": "userId, title, description are required"}), 400
+
+    # 🛑 👇 INSERT THE GENERATION GATE HERE 👇 🛑
+    is_allowed, remaining = check_and_increment_generation(user_id)
+    if not is_allowed:
+        print(f"[REJECT] User {user_id} blocked. Lifetime free generation limit reached.")
+        return jsonify({
+            "status": "limit_reached",
+            "error": "Upgrade Required",
+            "message": "You have used all 5 lifetime free PDF extractions. Please upgrade to Praksis Pro for unlimited access."
+        }), 403  # HTTP 403 Forbidden lets your Flutter app know to pop up the paywall overlay
+        # 🛑 👆 END OF GENERATION GATE 👆 🛑
 
     # Pre-process files into memory before starting thread
     # We must do this because request.files is not thread-safe in Flask
@@ -2311,6 +2333,17 @@ def remove_subscription_api():
         print(f"[ERROR] remove_subscription_api: {e}")
         return jsonify({"error": str(e)}), 500
 
+
+
+
+
+
+
+@app.route("/user/status/<user_id>", methods=["GET"])
+def user_status_endpoint(user_id):
+    from vector_db import get_user_status
+    status = get_user_status(user_id)
+    return jsonify(status), 200
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)

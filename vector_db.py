@@ -2608,3 +2608,120 @@ def delete_subscription_record(userId, generatedQAId):
     except Exception as e:
         print(f"[ERROR] delete_subscription_record error: {e}")
         return False
+
+
+def check_and_increment_generation(userId: str) -> Tuple[bool, int]:
+    """
+    Validates if a user is authorized to run a generation based on their tier.
+    Enforces a strict lifetime limit of 5 total generations for the free tier.
+
+    Returns:
+        A tuple of (is_allowed: bool, remaining_generations: int)
+        Note: remaining_generations returns -1 for premium accounts (unlimited).
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, userIdClean))
+
+        # 1. Retrieve the user record from your users collection
+        points = client.retrieve(
+            collection_name=COLLECTION_USERS,
+            ids=[point_id],
+            with_payload=True
+        )
+
+        # Safe baseline defaults for a brand-new user record
+        payload = {
+            "userId": userIdClean,
+            "tier": "free",
+            "generationCount": 0,
+            "lastSeen": datetime.now().isoformat()
+        }
+
+        if points and points[0].payload:
+            payload = points[0].payload
+
+        # Extract operational values safely
+        tier = payload.get("tier", "free")
+        count = payload.get("generationCount", 0)
+
+        # Premium users completely bypass usage limitations
+        if tier == "premium":
+            return True, -1
+
+        # 2. Hard Lifetime Limit Enforcement
+        if count >= 5:
+            return False, 0
+
+        # 3. Commit Increment
+        new_count = count + 1
+        payload.update({
+            "generationCount": new_count,
+            "lastSeen": datetime.now().isoformat()
+        })
+
+        # Write updated document structure back to Qdrant
+        client.upsert(
+            collection_name=COLLECTION_USERS,
+            points=[models.PointStruct(id=point_id, vector=[0.0] * VECTOR_DIM, payload=payload)]
+        )
+
+        return True, (5 - new_count)
+
+    except Exception as e:
+        print(f"[ERROR] check_and_increment_generation failed: {e}")
+        return True, 0
+
+
+def update_user_tier(userId: str, tier: str) -> bool:
+    """
+    Updates a user's subscription access tier.
+    Used by your payment webhook handlers to grant/revoke access.
+    :param tier: Expected string values are either 'free' or 'premium'
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, userIdClean))
+
+        client.set_payload(
+            collection_name=COLLECTION_USERS,
+            payload={"tier": tier},
+            points=[point_id]
+        )
+        print(f"[INFO] Successfully switched user {userIdClean} to tier: {tier}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] update_user_tier lookup failure: {e}")
+        return False
+
+
+def get_user_status(userId: str) -> dict:
+    """
+    Retrieves the current tier and calculations for remaining free generations
+    without modifying database state.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, userIdClean))
+
+        points = client.retrieve(
+            collection_name=COLLECTION_USERS,
+            ids=[point_id],
+            with_payload=True
+        )
+
+        if points and points[0].payload:
+            payload = points[0].payload
+            tier = payload.get("tier", "free")
+            count = payload.get("generationCount", 0)
+        else:
+            # Default state if the user record doesn't exist yet
+            tier = "free"
+            count = 0
+
+        remaining = -1 if tier == "premium" else max(0, 5 - count)
+        return {"tier": tier, "generationCount": count, "remaining": remaining}
+
+    except Exception as e:
+        print(f"[ERROR] get_user_status failed: {e}")
+        return {"tier": "free", "generationCount": 0, "remaining": 5}
