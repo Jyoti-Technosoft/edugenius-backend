@@ -1748,7 +1748,6 @@ def publish_to_marketplace(generatedQAId):
 
 # API to view marketplace
 @app.route("/marketplace", methods=["GET"])
-@require_auth
 def get_marketplace():
     banks = fetch_public_marketplace()
     return jsonify(banks), 200
@@ -1786,7 +1785,6 @@ def api_update_username():
 
 
 @app.route("/marketplace/community", methods=["GET"])
-@require_auth
 def get_community_marketplace():
     """API to view user-generated (non-admin) public banks."""
     try:
@@ -1844,12 +1842,9 @@ def init_question_bank():
 
 
 
-# Import the helper function we created earlier
-# Assuming it is in a file named 'grading_helper.py' or defined above
-# from grading_helper import grade_student_answer
+
 
 @app.route("/grade-single-answer", methods=["POST"])
-@require_auth
 def grade_single_answer():
     """
     Stateless grading endpoint.
@@ -1986,7 +1981,6 @@ def upload_source_material_endpoint():
 
 
 @app.route("/library/hierarchy", methods=["GET"])
-@require_auth
 def get_library_structure():
     """
     Returns the JSON tree of Class -> Subject -> Chapters.
@@ -2054,7 +2048,6 @@ def get_source_content(sourceId):
 
 
 @app.route("/htr", methods=["POST"])
-@require_auth
 def handwritten_text_recognition():
     """
     Receives an image file, sends it to the LastStraw Space,
@@ -2136,7 +2129,6 @@ def update_fcm_token():
 
 
 @app.route("/marketplace/user/<userId>", methods=["GET"])
-@require_auth
 def get_public_banks_by_user(userId):
     """
     API to fetch all public question banks created by a specific user.
@@ -2162,7 +2154,6 @@ def get_public_banks_by_user(userId):
 
 
 @app.route("/search/marketplace", methods=["GET"])
-@require_auth
 def search_marketplace_api():
     """
     Endpoint for real-time semantic search.
