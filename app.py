@@ -1,5 +1,5 @@
 import firebase_admin
-from firebase_admin import credentials, messaging
+from firebase_admin import credentials, messaging, auth
 import os
 import base64
 import json
@@ -52,6 +52,43 @@ ADMIN_USER_ID = "vabtoa3ri7e9juu3cg33vzmw9cs2"
 
 def is_admin(user_id):
     return str(user_id).strip().lower() == ADMIN_USER_ID.lower()
+    
+
+
+from functools import wraps
+
+def require_auth(f):
+    """
+    Cryptographically verifies the Firebase ID Token sent in the Authorization header.
+    Injects request.verified_uid into the request context for matching checks.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        
+        if not auth_header or not auth_header.startswith('Bearer '):
+            print("[SECURITY REJECT] Missing or malformed Authorization header.")
+            return jsonify({
+                "error": "Unauthorized", 
+                "message": "Access denied. Cryptographic authentication token is missing."
+            }), 401
+            
+        token = auth_header.split('Bearer ')[1]
+        
+        try:
+            # Mandate signature verification via the Firebase Admin SDK
+            decoded_token = auth.verify_id_token(token)
+            # Bind the bulletproof verified UID directly to the request object
+            request.verified_uid = decoded_token['uid']
+        except Exception as e:
+            print(f"[SECURITY REJECT] Token verification failed: {e}")
+            return jsonify({
+                "error": "Unauthorized", 
+                "message": "Access denied. Secure cryptographic token has expired or is invalid."
+            }), 401
+            
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 """
@@ -311,6 +348,7 @@ def background_task(job_id, user_id, user_name, title, description, pdf_bytes, p
         
 
 @app.route("/question-banks/upload", methods=["POST"])
+@require_auth
 def upload_pdf():
     print(f"\n[START] /question-banks/upload request received")
 
@@ -365,6 +403,7 @@ def upload_pdf():
 
 
 @app.route("/question-banks/status/<job_id>", methods=["GET"])
+@require_auth
 def get_status(job_id):
     """Flutter will call this every 5-10 seconds to check if it's done."""
     task = processing_tasks.get(job_id)
@@ -377,6 +416,7 @@ def get_status(job_id):
 
 
 @app.route("/document-analysis", methods=["POST"])
+@require_auth
 def analyze_pdf():
     print(f"\n[START] /document-analysis request received")
 
@@ -519,6 +559,7 @@ def background_image_task(job_id, user_id, user_name, title, description, image_
 
 
 @app.route("/question-banks/upload/images", methods=["POST"])
+@require_auth
 def upload_image():
     print("\n[START] /question-banks/upload/images request received")
 
@@ -578,6 +619,7 @@ def upload_image():
 
 
 @app.route("/question-banks", methods=["GET"])
+@require_auth
 def get_question_banks_by_user():
     userId = request.args.get("userId")
     if not userId:
@@ -595,6 +637,7 @@ def get_question_banks_by_user():
 
 
 @app.route("/question-banks/<generatedQAId>", methods=["GET"])
+@require_auth
 def get_question_bank_by_id(generatedQAId):
     page = request.args.get('page', default=1, type=int)
     limit = request.args.get('limit', default=10000, type=int)
@@ -609,6 +652,7 @@ def get_question_bank_by_id(generatedQAId):
 
 
 @app.route("/tests", methods=["POST"])
+@require_auth
 def generate_test():
     """
     API to fetch MCQs by generated-qa-Id and marks (limit),
@@ -669,6 +713,7 @@ def generate_test():
 
 
 @app.route("/tests/combined", methods=["POST"])
+@require_auth
 def combined_test():
     data = request.get_json(silent=True) or request.form
 
@@ -741,6 +786,7 @@ def combined_test():
 
 
 @app.route("/tests/<testId>", methods=["GET"])
+@require_auth
 def testId(testId):
     """
 
@@ -756,6 +802,7 @@ def testId(testId):
 
 
 @app.route("/paper-sets/user/<userId>", methods=["GET"])
+@require_auth
 def test_history_by_userId(userId):
     test_history = test_sessions_by_userId(userId)
     if not test_history:
@@ -859,6 +906,7 @@ def background_grader(attemptId, answers, question_map, userId, testTitle):
 
 
 @app.route("/tests/submit", methods=["POST"])
+@require_auth
 def submit_test():
     """
     Non-blocking Submission Endpoint.
@@ -1024,6 +1072,7 @@ def submit_test():
 
 
 @app.route("/tests/submitted/user/<userId>", methods=["GET"])
+@require_auth
 def submitted_tests_history(userId):
     """
     API to fetch a list of all submitted test sessions for a given user.
@@ -1043,6 +1092,7 @@ def submitted_tests_history(userId):
 
 
 @app.route("/tests/submitted/<testId>", methods=["GET"])
+@require_auth
 def get_single_submitted_test(testId):
     """
     Fetch details of one submitted test by testId.
@@ -1059,6 +1109,7 @@ def get_single_submitted_test(testId):
 
 
 @app.route("/question-banks/<generatedQAId>", methods=["PUT"])
+@require_auth
 def edit_question_bank(generatedQAId):
     """
     Unified API to perform add, edit, or delete operations on questions,
@@ -1185,6 +1236,7 @@ def edit_question_bank(generatedQAId):
 
 
 @app.route("/question-banks/manual", methods=["POST"])
+@require_auth
 def create_manual_question_bank():
     """
     API to create a new question bank manually.
@@ -1256,6 +1308,7 @@ def create_manual_question_bank():
 
 
 @app.route("/question-banks/<generatedQAId>", methods=["DELETE"])
+@require_auth
 def delete_question_bank(generatedQAId):
     """
     API to delete an entire question bank (metadata and all associated questions).
@@ -1279,6 +1332,7 @@ def delete_question_bank(generatedQAId):
 
 
 @app.route("/tests/submitted/<testId>", methods=["DELETE"])
+@require_auth
 def delete_submitted_test(testId):
     """
     API to delete a specific submitted test session result by its ID.
@@ -1299,6 +1353,7 @@ def delete_submitted_test(testId):
 
 
 @app.route("/paper-sets/<testId>", methods=["DELETE"])
+@require_auth
 def delete_test_session(testId):
     """
     API to delete a specific test session by its ID.
@@ -1320,6 +1375,7 @@ def delete_test_session(testId):
 
 
 @app.route("/test-attempts/<attemptId>", methods=["DELETE"])
+@require_auth
 def delete_submitted_test_attempt_api(attemptId):
     """
     API to delete a specific submitted test attempt by attemptId.
@@ -1337,6 +1393,7 @@ def delete_submitted_test_attempt_api(attemptId):
 
 
 @app.route("/paper-sets/<testId>", methods=["PUT"])
+@require_auth
 def edit_paperset(testId):
     """
     Update specific fields of a test session.
@@ -1426,6 +1483,7 @@ def edit_paperset(testId):
 
 
 @app.route("/tests/grade-analysis", methods=["POST"])
+@require_auth
 def grade_test_analysis():
     """
     API to provide AI-powered grading and analysis for submitted answers.
@@ -1498,6 +1556,7 @@ def grade_test_analysis():
 
 
 @app.route("/tests/grade-descriptive/<attemptId>", methods=["POST"])
+@require_auth
 def grade_descriptive_questions(attemptId):
     """
     Grade all pending descriptive questions for a specific test attempt.
@@ -1612,6 +1671,7 @@ def grade_descriptive_questions(attemptId):
 
 
 @app.route("/admin/subscriptions/assign", methods=["POST"])
+@require_auth
 def assign_subscription():
     data = request.json
     admin_id = data.get("adminId")  # Use this to check permissions
@@ -1631,6 +1691,7 @@ def assign_subscription():
 
 
 @app.route("/user/subscriptions/questions", methods=["GET"])
+@require_auth
 def get_my_subscribed_content():
     user_id = request.args.get("userId")
     if not user_id:
@@ -1647,6 +1708,7 @@ def get_my_subscribed_content():
 
 
 @app.route("/marketplace/download", methods=["POST"])
+@require_auth
 def download_curated_bank():
     data = request.json
     user_id = data.get("userId")
@@ -1664,6 +1726,7 @@ def download_curated_bank():
 
 
 @app.route("/admin/question-banks/<generatedQAId>/publish", methods=["PUT"])
+@require_auth
 def publish_to_marketplace(generatedQAId):
     data = request.json or {}
     admin_id = data.get("adminId")
@@ -1685,6 +1748,7 @@ def publish_to_marketplace(generatedQAId):
 
 # API to view marketplace
 @app.route("/marketplace", methods=["GET"])
+@require_auth
 def get_marketplace():
     banks = fetch_public_marketplace()
     return jsonify(banks), 200
@@ -1694,6 +1758,7 @@ def get_marketplace():
 
 
 @app.route("/user/update-username", methods=["POST"])
+@require_auth
 def api_update_username():
     data = request.json
     user_id = data.get("userId")
@@ -1721,6 +1786,7 @@ def api_update_username():
 
 
 @app.route("/marketplace/community", methods=["GET"])
+@require_auth
 def get_community_marketplace():
     """API to view user-generated (non-admin) public banks."""
     try:
@@ -1737,6 +1803,7 @@ def get_community_marketplace():
 
 
 @app.route("/question-banks/init", methods=["POST"])
+@require_auth
 def init_question_bank():
     """
     Initializes a new question bank with default 'Untitled' metadata.
@@ -1782,6 +1849,7 @@ def init_question_bank():
 # from grading_helper import grade_student_answer
 
 @app.route("/grade-single-answer", methods=["POST"])
+@require_auth
 def grade_single_answer():
     """
     Stateless grading endpoint.
@@ -1837,6 +1905,7 @@ def grade_single_answer():
 
 
 @app.route("/sources/upload", methods=["POST"])
+@require_auth
 def upload_source_material_endpoint():
     """
     Uploads raw text to be used as reference material (RAG).
@@ -1917,6 +1986,7 @@ def upload_source_material_endpoint():
 
 
 @app.route("/library/hierarchy", methods=["GET"])
+@require_auth
 def get_library_structure():
     """
     Returns the JSON tree of Class -> Subject -> Chapters.
@@ -1934,6 +2004,7 @@ def get_library_structure():
 
 
 @app.route("/sources/list", methods=["GET"])
+@require_auth
 def list_user_sources():
     """Fetches the list of uploaded source PDFs for a user."""
     user_id = request.args.get("userId")
@@ -1945,6 +2016,7 @@ def list_user_sources():
 
 
 @app.route("/sources/<sourceId>", methods=["DELETE"])
+@require_auth
 def delete_source_endpoint(sourceId):
     """Deletes a source file and its associated text chunks."""
     if not sourceId:
@@ -1958,6 +2030,7 @@ def delete_source_endpoint(sourceId):
 
 
 @app.route("/sources/<sourceId>/content", methods=["GET"])
+@require_auth
 def get_source_content(sourceId):
     """
     Fetches the full text content of a specific source file.
@@ -1981,6 +2054,7 @@ def get_source_content(sourceId):
 
 
 @app.route("/htr", methods=["POST"])
+@require_auth
 def handwritten_text_recognition():
     """
     Receives an image file, sends it to the LastStraw Space,
@@ -2035,6 +2109,7 @@ def handwritten_text_recognition():
 
 
 @app.route("/user/fcm-token", methods=["POST"])
+@require_auth
 def update_fcm_token():
     """
     Saves the user's FCM device token to Qdrant (User collection or Metadata).
@@ -2061,6 +2136,7 @@ def update_fcm_token():
 
 
 @app.route("/marketplace/user/<userId>", methods=["GET"])
+@require_auth
 def get_public_banks_by_user(userId):
     """
     API to fetch all public question banks created by a specific user.
@@ -2086,6 +2162,7 @@ def get_public_banks_by_user(userId):
 
 
 @app.route("/search/marketplace", methods=["GET"])
+@require_auth
 def search_marketplace_api():
     """
     Endpoint for real-time semantic search.
@@ -2116,6 +2193,7 @@ from gradio_client import Client, handle_file
 
 
 @app.route("/flashcards/init", methods=["POST"])
+@require_auth
 def init_flashcard_deck():
     data = request.get_json(silent=True) or request.form.to_dict()
     user_id = data.get("userId")
@@ -2153,6 +2231,7 @@ def init_flashcard_deck():
 
 
 @app.route("/flashcards/list", methods=["GET"])
+@require_auth
 def get_user_flashcards():
     user_id = request.args.get("userId")
 
@@ -2171,6 +2250,7 @@ def get_user_flashcards():
 
 
 @app.route("/flashcards/upload-pdf", methods=["POST"])
+@require_auth
 def upload_flashcard_pdf():
     print(f"\n[START] /flashcards/upload-pdf request received")
 
@@ -2291,6 +2371,7 @@ def background_flashcard_pdf_task(job_id, user_id, user_name, title, description
             os.remove(temp_path)
 
 @app.route("/flashcards/status/<job_id>", methods=["GET"])
+@require_auth
 def get_flashcard_status(job_id):
     # This looks up the status in your global processing_tasks dict
     status = processing_tasks.get(job_id)
@@ -2300,6 +2381,7 @@ def get_flashcard_status(job_id):
 
 
 @app.route("/user/subscriptions/remove", methods=["DELETE"])
+@require_auth
 def remove_subscription_api():
     """
     API to remove a subscription/downloaded bank from a user's library.
@@ -2340,6 +2422,7 @@ def remove_subscription_api():
 
 
 @app.route("/user/status/<user_id>", methods=["GET"])
+@require_auth
 def user_status_endpoint(user_id):
     from vector_db import get_user_status
     status = get_user_status(user_id)
