@@ -2493,30 +2493,49 @@ def finalize_submission_status(attemptId):
 
 
 
-# Add this new function:
 def store_user_fcm_token(user_id, token):
     try:
         user_id_clean = str(user_id).strip().lower()
-        # We use userId as the point ID (hashing it to UUID if necessary)
         point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id_clean))
 
-        # Check if user exists to preserve other data, or just upsert
-        payload = {
-            "userId": user_id_clean,
-            "fcmToken": token,
-            "lastSeen": datetime.now().isoformat()
-        }
-
-        # Dummy vector
-        vec = [0.0] * VECTOR_DIM
-
-        client.upsert(
+        # 1. Check if this profile point already exists in Qdrant
+        existing = client.retrieve(
             collection_name=COLLECTION_USERS,
-            points=[models.PointStruct(id=point_id, vector=vec, payload=payload)]
+            ids=[point_id],
+            with_payload=True
         )
+
+        if existing and existing[0].payload:
+            # 2. Safe Update: Use partial payload editing.
+            # This mutates the token fields without touching 'tier' or 'generationCount'
+            client.set_payload(
+                collection_name=COLLECTION_USERS,
+                payload={
+                    "fcmToken": token,
+                    "lastSeen": datetime.now().isoformat()
+                },
+                points=[point_id]
+            )
+            print(f"[INFO] Safely updated FCM token tokens for existing user: {user_id_clean}")
+        else:
+            # 3. Brand New User: Full baseline upsert
+            payload = {
+                "userId": user_id_clean,
+                "fcmToken": token,
+                "tier": "free",
+                "generationCount": 0,
+                "lastSeen": datetime.now().isoformat()
+            }
+            vec = [0.0] * VECTOR_DIM
+            client.upsert(
+                collection_name=COLLECTION_USERS,
+                points=[models.PointStruct(id=point_id, vector=vec, payload=payload)]
+            )
+            print(f"[INFO] Initialized brand new profile tracking point for user: {user_id_clean}")
+            
         return True
     except Exception as e:
-        print(f"Error storing FCM token: {e}")
+        print(f"Error storing FCM token securely: {e}")
         return False
 
 
