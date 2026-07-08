@@ -640,85 +640,6 @@ def fetch_random_mcqs(generatedQAId: str, num_questions: int = None):
 
 
 
-# def fetch_question_banks_metadata(userId: str):
-#     """
-#     Fetches a unified list of QBanks for the user's dashboard:
-#     1. QBanks they created (Owners).
-#     2. QBanks they subscribed to (Downloads).
-#     3. EXCLUDES Flashcards explicitly.
-#     """
-#     userIdClean = str(userId).strip().lower()
-#
-#     # --- Step 1: Get all Subscribed Bank IDs ---
-#     try:
-#         sub_hits = client.scroll(
-#             collection_name=COLLECTION_SUBSCRIPTIONS,
-#             scroll_filter=models.Filter(
-#                 must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-#             ),
-#             limit=1000,
-#             with_payload=True
-#         )[0]
-#         subscribed_ids = [h.payload["generatedQAId"] for h in sub_hits if h.payload]
-#     except Exception:
-#         subscribed_ids = []
-#
-#     # --- Step 2: Query MCQ Collection ---
-#     merged_filter = models.Filter(
-#         should=[
-#             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
-#             models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
-#         ],
-#         must_not=[
-#             models.FieldCondition(key="type", match=models.MatchValue(value="FLASHCARD"))
-#         ]
-#     )
-#
-#     banks, _ = client.scroll(
-#         collection_name=COLLECTION_MCQ,
-#         scroll_filter=merged_filter,
-#         limit=500,
-#         with_payload=True
-#     )
-#
-#     results = []
-#     for bank in banks:
-#         payload = bank.payload or {}
-#         gen_id = payload.get("generatedQAId")
-#
-#         # Determine Permissions
-#         is_owner = payload.get("userId") == userIdClean
-#
-#         # Fresh Count from Questions Collection
-#         count = client.count(
-#             collection_name=COLLECTION_QUESTIONS,
-#             count_filter=models.Filter(
-#                 must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
-#             )
-#         ).count
-#
-#         # Get top subject tags
-#         tags = compute_subject_tags_for_bank(gen_id)
-#
-#         results.append({
-#             "generatedQAId": gen_id,
-#             "title": payload.get("title", ""),
-#             "userName": payload.get("userName", ""),
-#             "description": payload.get("description", ""),
-#             "createdAt": payload.get("createdAt"),
-#             "totalQuestions": count,
-#             "tags": tags,
-#             "isPublic": payload.get("public", False),
-#             "canEdit": is_owner,
-#             "isDownloaded": gen_id in subscribed_ids,
-#
-#             # --- 🔥 ADD THIS LINE 🔥 ---
-#             "linkedSourceId": payload.get("linkedSourceId")
-#         })
-#
-#     return results
-
-
 def fetch_question_banks_metadata(userId: str):
     """
     Fetches a unified list of QBanks for the user's dashboard:
@@ -2892,3 +2813,44 @@ def remove_saved_question(userId: str, questionId: str) -> bool:
     except Exception as e:
         print(f"[ERROR] remove_saved_question mutation error: {e}")
         return False
+        
+        
+        
+def fetch_random_collection_questions(userId: str, collectionName: str, num_questions: int = None) -> List[Dict[str, Any]]:
+    """
+    Fetches all questions from a custom user collection, randomly samples the requested
+    amount, and shuffles option combinations for test stability.
+    """
+    try:
+        # Reuses your existing bulletproof collection fetcher
+        questions = fetch_saved_questions_by_collection(userId, collectionName)
+        if not questions:
+            return []
+            
+        if num_questions and num_questions < len(questions):
+            selected = random.sample(questions, num_questions)
+        else:
+            selected = questions
+            
+        formatted = []
+        for mcq in selected:
+            mcq_copy = mcq.copy()
+            options = mcq_copy.get("options", {})
+            
+            # Handle potential JSON string format variations safely
+            if isinstance(options, str):
+                try:
+                    options = json.loads(options)
+                except Exception:
+                    options = {}
+                    
+            if isinstance(options, dict) and options:
+                items = list(options.items())
+                random.shuffle(items)
+                mcq_copy["options"] = OrderedDict(items)
+                
+            formatted.append(mcq_copy)
+        return formatted
+    except Exception as e:
+        print(f"[ERROR] fetch_random_collection_questions failed: {e}")
+        return []

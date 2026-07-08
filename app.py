@@ -122,7 +122,8 @@ from vector_db import (store_mcqs, fetch_mcqs, fetch_random_mcqs, store_test_ses
     fetch_question_banks_metadata, fetch_question_context, client, COLLECTION_SUBMITTED, _extract_payload, add_subscription_record, \
     fetch_subscribed_questions, toggle_bank_public_status, fetch_public_marketplace, update_user_metadata_in_qdrant, fetch_community_marketplace, \
     initialize_bank_record, fetch_user_flashcards, store_source_material, delete_source_material, fetch_user_sources, fetch_full_source_text, \
-    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy, process_and_store_flashcards, check_and_increment_generation, get_user_status)
+    update_question_result_in_db,finalize_submission_status, fetch_user_public_banks, search_marketplace_banks, get_system_hierarchy, process_and_store_flashcards, check_and_increment_generation, get_user_status, \
+    fetch_random_collection_questions)
 
 
 from werkzeug.utils import secure_filename
@@ -472,9 +473,6 @@ def analyze_pdf():
 
 
 
-# Reuse the same status dictionary we set up for the PDF logic
-# processing_tasks = {}
-
 def background_image_task(job_id, user_id, user_name, title, description, image_data_list):
     """Heavy lifting for multiple images happens here."""
     try:
@@ -650,41 +648,113 @@ def get_question_bank_by_id(generatedQAId):
 
     return jsonify(result)
 
+#
+# @app.route("/tests", methods=["POST"])
+# @require_auth
+# def generate_test():
+#     """
+#     API to fetch MCQs by generated-qa-Id and marks (limit),
+#     and also to create a new test entry.
+#     """
+#     data = request.get_json(silent=True) or request.form
+#
+#     generatedQAId = data.get("generatedQAId")
+#     marks = data.get("marks")
+#     userId = data.get("userId")
+#     testTitle = data.get("testTitle")
+#     totalTime = data.get("totalTime")
+#
+#     if not generatedQAId:
+#         return jsonify({"error": "generatedQAId is required"}), 400
+#     # ... (other validation checks)
+#
+#     try:
+#         marks = int(marks)
+#     except ValueError:
+#         return jsonify({"error": "marks must be an integer"}), 400
+#
+#     testId = str(uuid.uuid4())
+#     createdAt = datetime.now().isoformat()
+#
+#     # 1. Fetch random sample
+#     test_data_results = fetch_random_mcqs(generatedQAId, num_questions=marks)
+#
+#     if not test_data_results:
+#         return jsonify({"message": "No MCQs found"}), 200
+#
+#     mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
+#
+#     # The list mcqs_data is now in the final, random order for the test.
+#
+#     # 2. ASSIGN NEW SEQUENTIAL INDEX (testIndex)
+#     final_mcqs_for_storage = []
+#     for i, mcq in enumerate(mcqs_data):
+#         # Assign a sequential index starting from 1 for the client/storage
+#         mcq['testIndex'] = i + 1
+#         final_mcqs_for_storage.append(mcq)
+#
+#     # 3. Store the session using the indexed list
+#     if userId:
+#         is_stored = store_test_session(userId, testId, testTitle, totalTime, createdAt, final_mcqs_for_storage)
+#         if not is_stored:
+#             return jsonify({"error": "Failed to store test session"}), 500
+#
+#     # 4. Return the result
+#     return jsonify({
+#         "message": "Test created and stored successfully",
+#         "userId": userId,
+#         "testId": testId,
+#         "totalTime": totalTime,
+#         "createdAt": createdAt,
+#         "questions": final_mcqs_for_storage  # Return the indexed list
+#     }), 200
+
+
+
 
 @app.route("/tests", methods=["POST"])
 @require_auth
 def generate_test():
     """
-    API to fetch MCQs by generated-qa-Id and marks (limit),
-    and also to create a new test entry.
+    API to fetch MCQs by generated-qa-Id OR collectionName and marks (limit),
+    and create a new test entry.
     """
     data = request.get_json(silent=True) or request.form
 
     generatedQAId = data.get("generatedQAId")
+    collectionName = data.get("collectionName")  # 🟢 NEW: Get collection parameters
+    sourceType = data.get("sourceType", "qbank") # 🟢 NEW: Explicit tracking type
     marks = data.get("marks")
     userId = data.get("userId")
     testTitle = data.get("testTitle")
     totalTime = data.get("totalTime")
 
-    if not generatedQAId:
-        return jsonify({"error": "generatedQAId is required"}), 400
-    # ... (other validation checks)
+    # 🟢 NEW: Flexible validation clause
+    if not generatedQAId and not collectionName:
+        return jsonify({"error": "Either generatedQAId or collectionName is required"}), 400
 
     try:
         marks = int(marks)
-    except ValueError:
+    except (ValueError, TypeError):
         return jsonify({"error": "marks must be an integer"}), 400
 
     testId = str(uuid.uuid4())
     createdAt = datetime.now().isoformat()
 
-    # 1. Fetch random sample
-    test_data_results = fetch_random_mcqs(generatedQAId, num_questions=marks)
+    mcqs_data = []
 
-    if not test_data_results:
-        return jsonify({"message": "No MCQs found"}), 200
+    # 🟢 NEW: Selection Route Switching
+    if sourceType == "collection" or collectionName:
+        # Fetch directly from the user's custom collection
+        mcqs_data = fetch_random_collection_questions(userId, collectionName or generatedQAId, num_questions=marks)
+    else:
+        # Fall back to standard Question Bank fetching logic
+        test_data_results = fetch_random_mcqs(generatedQAId, num_questions=marks)
+        if test_data_results:
+            mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
 
-    mcqs_data = test_data_results[0].get("metadata", {}).get("mcqs", [])
+    if not mcqs_data:
+        return jsonify({"message": "No MCQs found matching selection"}), 200
 
     # The list mcqs_data is now in the final, random order for the test.
 
@@ -711,6 +781,82 @@ def generate_test():
         "questions": final_mcqs_for_storage  # Return the indexed list
     }), 200
 
+#
+# @app.route("/tests/combined", methods=["POST"])
+# @require_auth
+# def combined_test():
+#     data = request.get_json(silent=True) or request.form
+#
+#     userId = data.get("userId")
+#     testTitle = data.get("testTitle")
+#     totalTime = data.get("totalTime")
+#     total_questions = data.get("total_questions")
+#     sources = data.get("sources")
+#
+#     # Validate required inputs
+#     if not all([userId, testTitle, totalTime, total_questions, sources]) or not isinstance(sources, list):
+#         return jsonify(
+#             {"error": "userId, testTitle, total_questions, totalTime, and a list of sources are required"}), 400
+#
+#     if not userId or request.verified_uid.lower() != str(userId).strip().lower():
+#         return jsonify({"error": "Forbidden", "message": "Identity validation check mismatch."}), 403
+#
+#     try:
+#         total_questions = int(total_questions)
+#         if sum(s.get("percentage", 0) for s in sources) != 100:
+#             return jsonify({"error": "Percentages must sum to 100"}), 400
+#     except (ValueError, TypeError):
+#         return jsonify({"error": "total_questions must be an integer and percentages must be numbers"}), 400
+#
+#     all_mcqs = []
+#
+#     for source in sources:
+#         qa_id = source.get("generatedQAId")
+#         percentage = source.get("percentage")
+#
+#         if not qa_id or not percentage:
+#             return jsonify({"error": "Each source must have 'generatedQAId' and 'percentage'"}), 400
+#
+#         # Calculate the number of questions for this source
+#         num_questions = round(total_questions * (percentage / 100))
+#
+#         # Fetch a random sample from this source
+#         # Note: fetch_random_mcqs returns a list containing a dict with metadata/mcqs
+#         mcqs_record = fetch_random_mcqs(generatedQAId=qa_id, num_questions=num_questions)
+#
+#         if mcqs_record:
+#             # Extract the list of questions and combine them
+#             all_mcqs.extend(mcqs_record[0].get("metadata", {}).get("mcqs", []))
+#
+#     # Shuffle the combined list of all MCQs to finalize the test order
+#     random.shuffle(all_mcqs)
+#
+#     if not all_mcqs:
+#         return jsonify({"message": "No MCQs found for the provided IDs"}), 200
+#
+#     # Assign a new, sequential index (testIndex) to each question
+#     final_mcqs_for_storage = []
+#     for i, mcq in enumerate(all_mcqs):
+#         # Assign a sequential index starting from 1
+#         mcq['testIndex'] = i + 1
+#         final_mcqs_for_storage.append(mcq)
+#
+#     # Generate test metadata
+#     testId = str(uuid.uuid4())
+#     createdAt = datetime.now().isoformat()
+#
+#     # Store the test session with the indexed list
+#     store_test_session(userId, testId, testTitle, totalTime, createdAt, final_mcqs_for_storage)
+#
+#     return jsonify({
+#         "userId": userId,
+#         "testId": testId,
+#         "testTitle": testTitle,
+#         "totalTime": totalTime,
+#         "createdAt": createdAt,
+#         "questions": final_mcqs_for_storage  # Return the correctly indexed list
+#     }), 200
+
 
 @app.route("/tests/combined", methods=["POST"])
 @require_auth
@@ -728,6 +874,9 @@ def combined_test():
         return jsonify(
             {"error": "userId, testTitle, total_questions, totalTime, and a list of sources are required"}), 400
 
+    if not userId or request.verified_uid.lower() != str(userId).strip().lower():
+        return jsonify({"error": "Forbidden", "message": "Identity validation check mismatch."}), 403
+
     try:
         total_questions = int(total_questions)
         if sum(s.get("percentage", 0) for s in sources) != 100:
@@ -739,32 +888,40 @@ def combined_test():
 
     for source in sources:
         qa_id = source.get("generatedQAId")
+        collection_name = source.get("collectionName")  # 🟢 NEW: Capture Collection Parameter
+        source_type = source.get("sourceType", "qbank")  # 🟢 NEW: Capture Source Classification
         percentage = source.get("percentage")
 
-        if not qa_id or not percentage:
-            return jsonify({"error": "Each source must have 'generatedQAId' and 'percentage'"}), 400
+        # 🟢 NEW: Updated validation to allow either identifier variation
+        if not qa_id and not collection_name:
+            return jsonify({"error": "Each source must have 'generatedQAId' or 'collectionName'"}), 400
+
+        if not percentage:
+            return jsonify({"error": "Each source must have a 'percentage'"}), 400
 
         # Calculate the number of questions for this source
         num_questions = round(total_questions * (percentage / 100))
 
-        # Fetch a random sample from this source
-        # Note: fetch_random_mcqs returns a list containing a dict with metadata/mcqs
-        mcqs_record = fetch_random_mcqs(generatedQAId=qa_id, num_questions=num_questions)
-
-        if mcqs_record:
-            # Extract the list of questions and combine them
-            all_mcqs.extend(mcqs_record[0].get("metadata", {}).get("mcqs", []))
+        # 🟢 NEW: Mixed extraction logic routing
+        if source_type == "collection" or collection_name:
+            # Gather random questions from collection subset
+            mcqs_data = fetch_random_collection_questions(userId, collection_name or qa_id, num_questions=num_questions)
+            all_mcqs.extend(mcqs_data)
+        else:
+            # Fall back to standard question bank fetch
+            mcqs_record = fetch_random_mcqs(generatedQAId=qa_id, num_questions=num_questions)
+            if mcqs_record:
+                all_mcqs.extend(mcqs_record[0].get("metadata", {}).get("mcqs", []))
 
     # Shuffle the combined list of all MCQs to finalize the test order
     random.shuffle(all_mcqs)
 
     if not all_mcqs:
-        return jsonify({"message": "No MCQs found for the provided IDs"}), 200
+        return jsonify({"message": "No MCQs found for the provided parameters"}), 200
 
     # Assign a new, sequential index (testIndex) to each question
     final_mcqs_for_storage = []
     for i, mcq in enumerate(all_mcqs):
-        # Assign a sequential index starting from 1
         mcq['testIndex'] = i + 1
         final_mcqs_for_storage.append(mcq)
 
