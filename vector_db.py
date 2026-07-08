@@ -2807,10 +2807,11 @@ def fetch_user_collection_names(userId: str) -> List[str]:
             with_vectors=False
         )
 
-        # Pull distinct collection names, guaranteeing "All Saved" is universally present
         collections_set = {"All Saved"}
         for point in results:
-            name = point.payload.get("collectionName")
+            # 🟢 FIX: Use your bulletproof internal payload extractor
+            payload = _extract_payload(point)
+            name = payload.get("collectionName")
             if name:
                 collections_set.add(name)
 
@@ -2841,7 +2842,14 @@ def fetch_saved_questions_by_collection(userId: str, collectionName: str = None)
             with_payload=True
         )
 
-        target_question_ids = [p.payload.get("questionId") for p in bookmark_points if p.payload.get("questionId")]
+        # 🟢 FIX: Use your bulletproof internal payload extractor here as well
+        target_question_ids = []
+        for p in bookmark_points:
+            payload = _extract_payload(p)
+            q_id = payload.get("questionId")
+            if q_id:
+                target_question_ids.append(q_id)
+
         if not target_question_ids:
             return []
 
