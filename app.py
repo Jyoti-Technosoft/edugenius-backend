@@ -2419,5 +2419,102 @@ def user_status_endpoint(user_id):
     status = get_user_status(user_id)
     return jsonify(status), 200
 
+
+
+
+
+# ============================================================================
+#SAVED QUESTIONS COLLECTIONS ENDPOINTS
+# ============================================================================
+
+@app.route("/user/saved-questions", methods=["POST"])
+@require_auth
+def api_save_question():
+    """
+    Bookmarks an atomic question mapping link element into a tracking subdirectory folder.
+    """
+    data = request.get_json() or {}
+    user_id = data.get("userId")
+    question_id = data.get("questionId")
+    generated_qa_id = data.get("generatedQAId")
+    collection_name = data.get("collectionName", "All Saved")
+
+    if not all([user_id, question_id, generated_qa_id]):
+        return jsonify({"error": "Missing required data properties (userId, questionId, generatedQAId)"}), 400
+
+    if request.verified_uid.lower() != str(user_id).strip().lower():
+        return jsonify({"error": "Forbidden", "message": "Cryptographic authentication collision."}), 403
+
+    try:
+        from vector_db import save_question_to_collection
+        bookmark_id = save_question_to_collection(user_id, question_id, generated_qa_id, collection_name)
+        return jsonify({
+            "message": "Question bookmarked successfully.",
+            "bookmarkId": bookmark_id,
+            "collectionName": collection_name
+        }), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/user/saved-questions/collections", methods=["GET"])
+@require_auth
+def api_get_collection_folders():
+    """
+    Queries distinct folder path names configured across saved payloads.
+    """
+    user_id = request.args.get("userId")
+    if not user_id:
+        return jsonify({"error": "userId string variable required"}), 400
+
+    if request.verified_uid.lower() != str(user_id).strip().lower():
+        return jsonify({"error": "Forbidden", "message": "Identity visibility lock active."}), 403
+
+    from vector_db import fetch_user_collection_names
+    folders = fetch_user_collection_names(user_id)
+    return jsonify({"collections": folders}), 200
+
+
+@app.route("/user/saved-questions/list", methods=["GET"])
+@require_auth
+def api_get_saved_questions():
+    """
+    Fetches hydrated structural object profiles for all questions bookmarked under a targeted folder.
+    """
+    user_id = request.args.get("userId")
+    collection_name = request.args.get("collectionName", "All Saved")
+
+    if not user_id:
+        return jsonify({"error": "userId tracking key required"}), 400
+
+    if request.verified_uid.lower() != str(user_id).strip().lower():
+        return jsonify({"error": "Forbidden", "message": "Scope boundary intercept verification failed."}), 403
+
+    from vector_db import fetch_saved_questions_by_collection
+    saved_items = fetch_saved_questions_by_collection(user_id, collection_name)
+    return jsonify(saved_items), 200
+
+
+@app.route("/user/saved-questions/<question_id>", methods=["DELETE"])
+@require_auth
+def api_remove_bookmark(question_id):
+    """
+    Deletes the saved reference lookup link from the targeted profile workspace catalog maps.
+    """
+    user_id = request.args.get("userId")
+    if not user_id:
+        return jsonify({"error": "userId query argument query string token required"}), 400
+
+    if request.verified_uid.lower() != str(user_id).strip().lower():
+        return jsonify({"error": "Forbidden", "message": "Security boundary parameters lock tracking check failed."}), 403
+
+    from vector_db import remove_saved_question
+    success = remove_saved_question(user_id, question_id)
+    if success:
+        return jsonify({"message": "Bookmark mapping trace dropped successfully."}), 200
+    return jsonify({"error": "Failed to safely adjust cloud asset points."}), 500
+
+
+
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=10000, debug=True)

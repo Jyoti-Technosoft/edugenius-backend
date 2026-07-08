@@ -25,6 +25,11 @@ COLLECTION_SUBMITTED = "submitted_tests_collection"
 COLLECTION_SUBSCRIPTIONS = "user_subscriptions"
 COLLECTION_SOURCES = "source_materials_collection"
 COLLECTION_USERS = "users_collection"
+COLLECTION_SAVED_QUESTIONS = "saved_questions_collection"
+
+
+
+
 
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
 embedding_model = TextEmbedding()
@@ -85,7 +90,11 @@ def ensure_collections():
             vectors_config=vector_params
         )
 
-
+    if COLLECTION_SAVED_QUESTIONS not in existing:
+        client.create_collection(
+            collection_name=COLLECTION_SAVED_QUESTIONS,
+            vectors_config=vector_params
+        )
 
 
 
@@ -124,6 +133,10 @@ def ensure_collections():
 
     _safe_index(COLLECTION_SOURCES, "type", models.PayloadSchemaType.KEYWORD)
     _safe_index(COLLECTION_USERS, "userId")
+
+    # Add payload index lookups for high scannability
+    _safe_index(COLLECTION_SAVED_QUESTIONS, "userId")
+    _safe_index(COLLECTION_SAVED_QUESTIONS, "collectionName")
 
 
 
@@ -2744,3 +2757,130 @@ def get_user_status(userId: str) -> dict:
     except Exception as e:
         print(f"[ERROR] get_user_status failed: {e}")
         return {"tier": "free", "generationCount": 0, "remaining": 5}
+
+
+def save_question_to_collection(userId: str, questionId: str, generatedQAId: str,
+                                collectionName: str = "All Saved") -> str:
+    """
+    Saves a reference link bookmark for a specific question into a user custom folder folder collection.
+    Uses a deterministic UUID tracking constraint to prevent duplication.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        folderNameClean = str(collectionName).strip() if collectionName else "All Saved"
+
+        # Deterministic constraint link ID maps point unique limits cleanly
+        bookmark_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{userIdClean}_{questionId}"))
+
+        payload = {
+            "userId": userIdClean,
+            "questionId": questionId,
+            "generatedQAId": generatedQAId,
+            "collectionName": folderNameClean,
+            "savedAt": datetime.now().isoformat()
+        }
+
+        # Standalone structural registration uses dummy array vectors
+        client.upsert(
+            collection_name=COLLECTION_SAVED_QUESTIONS,
+            points=[models.PointStruct(id=bookmark_id, vector=[0.0] * VECTOR_DIM, payload=payload)]
+        )
+        return bookmark_id
+    except Exception as e:
+        print(f"[ERROR] save_question_to_collection structural lookup fail: {e}")
+        raise e
+
+
+def fetch_user_collection_names(userId: str) -> List[str]:
+    """
+    Scans bookmark payloads to extract all unique folder list names configured by the user profile.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        filt = models.Filter(must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))])
+
+        results, _ = client.scroll(
+            collection_name=COLLECTION_SAVED_QUESTIONS,
+            scroll_filter=filt,
+            limit=5000,
+            with_payload=True,
+            with_vectors=False
+        )
+
+        # Pull distinct collection names, guaranteeing "All Saved" is universally present
+        collections_set = {"All Saved"}
+        for point in results:
+            name = point.payload.get("collectionName")
+            if name:
+                collections_set.add(name)
+
+        return sorted(list(collections_set))
+    except Exception as e:
+        print(f"[ERROR] fetch_user_collection_names extraction error: {e}")
+        return ["All Saved"]
+
+
+def fetch_saved_questions_by_collection(userId: str, collectionName: str = None) -> List[Dict[str, Any]]:
+    """
+    Retrieves bookmark reference logs, then hydra-fetches full structural payload text configurations
+    from the parent baseline source engine question catalog.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        conditions = [models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+
+        if collectionName and collectionName != "All Saved":
+            conditions.append(
+                models.FieldCondition(key="collectionName", match=models.MatchValue(value=collectionName.strip())))
+
+        # 1. Fetch referencing bookmark links
+        bookmark_points, _ = client.scroll(
+            collection_name=COLLECTION_SAVED_QUESTIONS,
+            scroll_filter=models.Filter(must=conditions),
+            limit=2000,
+            with_payload=True
+        )
+
+        target_question_ids = [p.payload.get("questionId") for p in bookmark_points if p.payload.get("questionId")]
+        if not target_question_ids:
+            return []
+
+        # 2. Retrieve parent rich dataset configurations
+        question_records = client.retrieve(
+            collection_name=COLLECTION_QUESTIONS,
+            ids=target_question_ids,
+            with_payload=True
+        )
+
+        parsed_questions = []
+        for q_point in question_records:
+            payload = _extract_payload(q_point)
+            if "options" in payload and isinstance(payload["options"], str):
+                try:
+                    payload["options"] = json.loads(payload["options"])
+                except Exception:
+                    pass
+            parsed_questions.append(payload)
+
+        return parsed_questions
+    except Exception as e:
+        print(f"[ERROR] fetch_saved_questions_by_collection dataset compile error: {e}")
+        return []
+
+
+def remove_saved_question(userId: str, questionId: str) -> bool:
+    """
+    Clears out the distinct custom bookmark mapping link parameter from the database cluster nodes.
+    """
+    try:
+        userIdClean = str(userId).strip().lower()
+        bookmark_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{userIdClean}_{questionId}"))
+
+        client.delete(
+            collection_name=COLLECTION_SAVED_QUESTIONS,
+            points_selector=models.PointIdsList(points=[bookmark_id])
+        )
+        return True
+    except Exception as e:
+        print(f"[ERROR] remove_saved_question mutation error: {e}")
+        return False
