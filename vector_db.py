@@ -470,13 +470,13 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
         dummy_vector = [0.0] * VECTOR_DIM
 
         # 1. Fetch parent bank (metadata)
-        bank_hits = client.search(
+        bank_hits = client.query_points(
             collection_name=COLLECTION_MCQ,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=filt,
             limit=1,
             with_payload=True
-        )
+        ).points
         if not bank_hits:
             return []
 
@@ -565,13 +565,13 @@ def fetch_mcqs(userId: str = None, generatedQAId: str = None, page: int = 1, lim
         dummy_vector = [0.0] * VECTOR_DIM
 
         # Fetch all banks metadata
-        banks_hits = client.search(
+        banks_hits = client.query_points(
             collection_name=COLLECTION_MCQ,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=bank_filt,
             limit=1000,
             with_payload=True,
-        )
+        ).points
 
         bank_map = {}
         generated_ids = []
@@ -945,13 +945,13 @@ def test_sessions_by_userId(userId):
         filt = models.Filter(must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))])
         # Using dummy vector because search requires a vector query in your client usage
         dummy_vector = [0.0] * VECTOR_DIM
-        hits = client.search(
+        hits = client.query_points(
             collection_name=COLLECTION_TEST_SESSIONS,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=filt,
             limit=1000,
             with_payload=True
-        )
+        ).points
         sessions = []
         for h in hits:
             payload = _extract_payload(h)
@@ -1029,13 +1029,13 @@ def submitted_tests_by_userId(userId):
         )
 
         dummy_vector = [0.0] * VECTOR_DIM
-        hits = client.search(
+        hits = client.query_points(
             collection_name=COLLECTION_SUBMITTED,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=filt,
             limit=2000,
             with_payload=True
-        )
+        ).points
 
         if not hits:
             return []
@@ -1092,13 +1092,13 @@ def fetch_submitted_test_by_testId(testId):
         )
 
         dummy_vector = [0.0] * VECTOR_DIM  # Placeholder
-        hits = client.search(
+        hits = client.query_points(
             collection_name=COLLECTION_SUBMITTED,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=filt,
             limit=1000,
             with_payload=True
-        )
+        ).points
 
         if not hits:
             return None
@@ -1460,13 +1460,13 @@ def delete_submitted_test_by_id(testId):
         )
         # 2️⃣ Find all attempts with this testId
         dummy_vector = [0.0] * VECTOR_DIM
-        hits = client.search(
+        hits = client.query_points(
             collection_name=COLLECTION_SUBMITTED,
-            query_vector=dummy_vector,
+            query=dummy_vector,
             query_filter=filt,
             limit=2000,
             with_payload=False
-        )
+        ).points
         if not hits:
             print(f"[INFO] No submitted test attempts found for testId={testId}")
         else:
@@ -1936,13 +1936,13 @@ def search_marketplace_banks(query_text: str, limit: int = 5):
         )
 
         # 3. Perform Vector Search
-        hits = client.search(
+        hits = client.query_points(
             collection_name=COLLECTION_MCQ,
-            query_vector=query_vector,
+            query=query_vector,
             query_filter=search_filter,
             limit=limit,
             with_payload=True
-        )
+        ).points
 
         results = []
         for hit in hits:
