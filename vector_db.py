@@ -5,14 +5,14 @@ from collections import OrderedDict
 from datetime import datetime
 import collections
 from drive_uploader import load_env
+load_env()  # Load backend/.env before reading Qdrant configuration.
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from qdrant_client import QdrantClient, models
 from fastembed import TextEmbedding
 
-load_env()  # make sure env is loaded before using
 # Configuration - set these in your environment for Qdrant Cloud
-QDRANT_URL =os.environ.get("QDRANT_URL")  # change to your cluster URL
+QDRANT_URL = os.environ.get("QDRANT_URL")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY")
 VECTOR_DIM = 384
 DISTANCE = models.Distance.COSINE
@@ -31,8 +31,32 @@ COLLECTION_SAVED_QUESTIONS = "saved_questions_collection"
 
 
 
-client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
-embedding_model = TextEmbedding()
+class _LazyQdrantClient:
+    """Create the network client on first database access, not during Flask import."""
+
+    def __init__(self):
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            if not QDRANT_URL or QDRANT_URL.lower().startswith("your "):
+                raise RuntimeError("QDRANT_URL is missing or still a placeholder; configure it in edugenius-backend/.env.")
+            if not QDRANT_API_KEY or QDRANT_API_KEY.lower().startswith("your "):
+                raise RuntimeError("QDRANT_API_KEY is missing or still a placeholder; configure it in edugenius-backend/.env.")
+            self._client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=TIMEOUT)
+        return self._client
+
+    def __getattr__(self, name):
+        return getattr(self._get_client(), name)
+
+
+def _create_qdrant_client():
+    """Return a lazy client so Flask can start before database access is needed."""
+    return _LazyQdrantClient()
+
+
+client = _create_qdrant_client()
+_embedding_model = None
 
 def ensure_collections():
     try:
@@ -140,15 +164,17 @@ def ensure_collections():
 
 
 
-ensure_collections()
-
 def embed(texts):
+    global _embedding_model
     if isinstance(texts, str):
         texts = [texts]
     
     # Generate embeddings using FastEmbed
     # It returns a generator of numpy arrays, so we convert them to lists of floats
-    embeddings = embedding_model.embed(texts)
+    if _embedding_model is None:
+        print("[INFO] Loading FastEmbed model on first embedding request.")
+        _embedding_model = TextEmbedding()
+    embeddings = _embedding_model.embed(texts)
     
     return [e.tolist() for e in embeddings]
 
@@ -649,54 +675,95 @@ def fetch_question_banks_metadata(userId: str):
     """
     userIdClean = str(userId).strip().lower()
 
-    # --- Step 1: Get all Subscribed Bank IDs AND their download timestamps ---
-    try:
-        sub_hits = client.scroll(
-            collection_name=COLLECTION_SUBSCRIPTIONS,
-            scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
-            ),
-            limit=1000,
-            with_payload=True
-        )[0]
+    def _scroll_all(collection_name, scroll_filter):
+        """Read a collection in bounded pages so bank lists are not truncated."""
+        points = []
+        offset = None
+        while True:
+            page, offset = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=scroll_filter,
+                limit=500,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            points.extend(page)
+            if offset is None:
+                return points
 
-        # Create a dictionary mapping the Bank ID to the exact time it was downloaded
-        subscribed_map = {}
-        for h in sub_hits:
-            if h.payload:
-                q_id = h.payload.get("generatedQAId")
-                # Fallback to downloadedAt just in case older records use it
-                sub_time = h.payload.get("subscribedAt") or h.payload.get("downloadedAt")
-                if q_id and sub_time:
-                    subscribed_map[q_id] = sub_time
+    # --- Step 1: Get all subscribed bank IDs and their download timestamps ---
+    sub_hits = _scroll_all(
+        COLLECTION_SUBSCRIPTIONS,
+        models.Filter(
+            must=[models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))]
+        ),
+    )
 
-        subscribed_ids = list(subscribed_map.keys())
-    except Exception:
-        subscribed_map = {}
-        subscribed_ids = []
+    subscribed_map = {}
+    for hit in sub_hits:
+        payload = getattr(hit, "payload", None) or {}
+        q_id = payload.get("generatedQAId")
+        sub_time = payload.get("subscribedAt") or payload.get("downloadedAt")
+        if q_id and sub_time:
+            subscribed_map[q_id] = sub_time
+    subscribed_ids = list(subscribed_map.keys())
 
     # --- Step 2: Query MCQ Collection ---
-    merged_filter = models.Filter(
+    # Qdrant's MatchAny requires at least one value. Users with no downloads
+    # still need to see banks they own, so only add this clause when there are
+    # subscribed bank IDs to match.
+    ownership_conditions = [
+        models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
+    ]
+    if subscribed_ids:
+        ownership_conditions.append(
+            models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
+        )
+
+    # Do not filter on payload `type` here: existing Qdrant collections may
+    # lack the keyword index required for that condition. Exclude flashcards
+    # after reading their payloads below instead.
+    merged_filter = models.Filter(should=ownership_conditions)
+
+    banks = _scroll_all(COLLECTION_MCQ, merged_filter)
+
+    # Aggregate question counts and subjects with one paginated scan. This
+    # avoids N+1 Qdrant calls that could fail midway and turn the whole list
+    # into a 500/503 when a user has many banks.
+    question_filter = models.Filter(
         should=[
             models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean)),
-            models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids))
-        ],
-        must_not=[
-            models.FieldCondition(key="type", match=models.MatchValue(value="FLASHCARD"))
+            models.FieldCondition(key="generatedQAId", match=models.MatchAny(any=subscribed_ids)),
+        ] if subscribed_ids else [
+            models.FieldCondition(key="userId", match=models.MatchValue(value=userIdClean))
         ]
     )
-
-    banks, _ = client.scroll(
-        collection_name=COLLECTION_MCQ,
-        scroll_filter=merged_filter,
-        limit=500,
-        with_payload=True
-    )
+    question_points = _scroll_all(COLLECTION_QUESTIONS, question_filter)
+    question_counts = Counter()
+    subject_counts = {}
+    for point in question_points:
+        point_payload = getattr(point, "payload", None) or {}
+        bank_id = point_payload.get("generatedQAId")
+        if not bank_id:
+            continue
+        question_counts[bank_id] += 1
+        predicted_subject = point_payload.get("predicted_subject")
+        if isinstance(predicted_subject, str):
+            try:
+                predicted_subject = json.loads(predicted_subject)
+            except (TypeError, ValueError):
+                predicted_subject = None
+        label = predicted_subject.get("label") if isinstance(predicted_subject, dict) else None
+        if label:
+            subject_counts.setdefault(bank_id, Counter())[label] += 1
 
     results = []
     for bank in banks:
-        payload = bank.payload or {}
+        payload = getattr(bank, "payload", None) or {}
         gen_id = payload.get("generatedQAId")
+        if not gen_id or payload.get("type") == "FLASHCARD":
+            continue
 
         # Determine Permissions
         is_owner = payload.get("userId") == userIdClean
@@ -706,16 +773,8 @@ def fetch_question_banks_metadata(userId: str):
         # If it's downloaded, use the subscription time. Otherwise, use original creation time.
         display_time = subscribed_map.get(gen_id) if is_downloaded else payload.get("createdAt")
 
-        # Fresh Count from Questions Collection
-        count = client.count(
-            collection_name=COLLECTION_QUESTIONS,
-            count_filter=models.Filter(
-                must=[models.FieldCondition(key="generatedQAId", match=models.MatchValue(value=gen_id))]
-            )
-        ).count
-
-        # Get top subject tags
-        tags = compute_subject_tags_for_bank(gen_id)
+        count = question_counts.get(gen_id, 0)
+        tags = [label for label, _ in subject_counts.get(gen_id, Counter()).most_common(3)]
 
         results.append({
             "generatedQAId": gen_id,
@@ -764,7 +823,7 @@ def compute_subject_tags_for_bank(generatedQAId, top_k=3):
         for point in points:
             payload = point.payload or {}
             pred_sub = payload.get("predicted_subject", {})
-            label = pred_sub.get("label")
+            label = pred_sub.get("label") if isinstance(pred_sub, dict) else None
 
             if label:
                 subject_counter[label] += 1
@@ -2854,3 +2913,8 @@ def fetch_random_collection_questions(userId: str, collectionName: str, num_ques
     except Exception as e:
         print(f"[ERROR] fetch_random_collection_questions failed: {e}")
         return []
+
+
+if __name__ == "__main__":
+    # Run collection creation/index setup explicitly with: python vector_db.py
+    ensure_collections()
