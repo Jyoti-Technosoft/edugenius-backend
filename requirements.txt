@@ -4,6 +4,6 @@ gunicorn
 gradio_client
 numpy
 werkzeug
-qdrant-client== 1.15.1
+qdrant-client==1.19.1
 firebase-admin
 fastembed
